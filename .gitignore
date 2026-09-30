@@ -1,0 +1,20 @@
+# Reference implementation kept locally for consultation only.
+/reference_source/
+
+# Local configuration and secrets.
+/.env
+/.env.*
+!/.env.example
+
+# Dependencies and generated files.
+/vendor/
+/storage/uploads/*
+!/storage/uploads/.gitkeep
+*.log
+.phpunit.result.cache
+
+# IDE and OS files.
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
