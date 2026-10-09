@@ -102,6 +102,9 @@ try {
     check(request('index.php?page=decisions')[0] === 200, 'Super admin should access decisions.');
     check(request('index.php?page=products')[0] === 200, 'Admin should access products.');
     check(request('index.php?page=imports')[0] === 200, 'Admin should access imports.');
+    foreach (['exports','export-create'] as $route) check(request('index.php?page='.$route)[0]===200,'Admin should access export pages.');
+    check(request('index.php?page=exports',['csrf_token'=>$logoutToken])[0]===405,'Export list must reject writes.');
+    check(request('index.php?page=export-file&id=999999999')[0]===404,'Missing export PDF must return 404.');
     check(request('index.php?page=import-create')[0] === 200, 'Admin should access receipt creation.');
     check(request('index.php?page=imports', ['csrf_token' => $logoutToken])[0] === 405, 'Import list must reject writes.');
     foreach (['materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products'] as $route) check(request('index.php?page=' . $route)[0] === 200, 'Admin should access category pages.');
@@ -127,6 +130,7 @@ try {
     check(request('index.php?page=reports')[0] === 403, 'Non-admin report access must be blocked.');
     check(request('index.php?page=products')[0] === 403, 'Non-admin product access must be blocked.');
     check(request('index.php?page=imports')[0] === 403, 'Non-admin import access must be blocked.');
+    foreach (['exports','export-create','export-file&id=999999999'] as $route) check(request('index.php?page='.$route)[0]===403,'Non-admin export access must be blocked.');
     check(request('index.php?page=import-create')[0] === 403, 'Non-admin receipt creation must be blocked.');
     foreach (['materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products'] as $route) check(request('index.php?page=' . $route)[0] === 403, 'Non-admin category access must be blocked.');
     check(request('index.php?page=warehouses', ['csrf_token' => $logoutToken, 'action' => 'save'])[0] === 403, 'Non-admin users must not change warehouses.');

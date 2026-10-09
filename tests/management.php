@@ -455,7 +455,71 @@ try {
     $pdo->prepare('UPDATE users SET is_super_admin=1 WHERE id=?')->execute([$actorId]);
     try { $pdo->exec('DELETE FROM audit_logs'); throw new RuntimeException('Immutable audit trigger missing.'); }
     catch (PDOException $error) { verify($error->getCode() === '45000', 'Unexpected audit trigger error.'); }
+    $lotCreate = $draftCreate; $lotCreate['number'] = 'EXPORT-SOURCE'; $lotCreate['status'] = 'confirmed';
+    $lotCreate['items'] = json_encode([['product_id'=>$createdProduct['id'],'version'=>$createdProduct['version'],'quantity'=>'3','unit_price'=>'3.333333','amount_before_tax'=>'10','tax_code'=>'KCT']]);
+    verify(httpManagement('import-create', $lotCreate)[0] === 200, 'Export source receipt failed.');
+    $lotBill = array_values(array_filter(loadImports($pdo), static fn($row)=>$row['number']==='EXPORT-SOURCE'))[0];
+    $lotId = (string)$lotBill['items'][0]['id']; $lot = loadExportSources($pdo,$lotId)[0];
+    $exportLine = ['source_import_detail_id'=>$lotId,'version'=>$lot['version'],'quantity'=>'1','note'=>'Lot note'];
+    $exportInput = ['csrf_token'=>$csrf,'action'=>'create','warehouse'=>$warehouseIds[0],'number'=>'EXPORT-DRAFT','issued_date'=>'2026-10-10',
+        'issue_type'=>'allocation','status'=>'draft','reason'=>'Cấp phát kiểm thử','receiver_name'=>'Người nhận <script>','items'=>json_encode([$exportLine])];
+    verify(httpManagement('export-create', array_diff_key($exportInput,['csrf_token'=>true]))[0] === 403, 'Exports require CSRF.');
+    rejected(fn()=>saveExport($pdo,$targetId,$exportInput));
+    foreach (['exports','export-create'] as $route) verify(httpManagement($route)[0]===200,'Export route failed.');
+    verify(httpManagement('exports',$exportInput)[0]===405,'Export list must be read-only.');
+    verify(httpManagement('export-create',$exportInput)[0]===200 && loadExportSources($pdo,$lotId)[0]['remaining_quantity']==='3.000000','Draft must not consume stock.');
+    verify(httpManagement('export-create',$exportInput)[0]===422,'Duplicate export number must fail.');
+    foreach (['quantity'=>'0','version'=>str_repeat('b',64),'source_import_detail_id'=>'999999999'] as $key=>$value) {
+        $bad=$exportInput; $bad['number']='BAD-EXPORT'; $line=$exportLine; $line[$key]=$value; $bad['items']=json_encode([$line]);
+        verify(httpManagement('export-create',$bad)[0]===422,'Invalid export line accepted: '.$key);
+    }
+    $bad=$exportInput; $bad['number']='BAD-EXPORT'; $line=$exportLine; $line['quantity']='2'; $bad['items']=json_encode([$line,$line]);
+    verify(httpManagement('export-create',$bad)[0]===422,'Repeated lot lines must share the availability limit.');
+    $bad=$exportInput; $bad['warehouse']=$warehouseIds[1]; verify(httpManagement('export-create',$bad)[0]===422,'Cross-warehouse source must fail.');
+    $bad=$exportInput; $bad['issued_date']='2026-10-09'; verify(httpManagement('export-create',$bad)[0]===422,'Export cannot precede its source import.');
+    $bad=$exportInput; $bad['issue_type']='transfer'; verify(httpManagement('export-create',$bad)[0]===422,'Transfer destination is required.');
+    $bad['destination_warehouse']=$warehouseIds[0]; verify(httpManagement('export-create',$bad)[0]===422,'Same-warehouse transfer must fail.');
+    $bad['destination_warehouse']='999999999'; verify(httpManagement('export-create',$bad)[0]===422,'Missing destination must fail.');
+    $confirmed=$exportInput; $confirmed['number']='EXPORT-FIRST'; $confirmed['status']='confirmed';
+    verify(httpDecisionPdf($confirmed,'not a PDF','bad.pdf','export-create')[0]===422,'Export PDF validation failed.');
+    verify(httpDecisionPdf($confirmed,$pdf,'export.pdf','export-create')[0]===200,'Confirmed export with PDF failed.');
+    $first=array_values(array_filter(loadExports($pdo),static fn($row)=>$row['number']==='EXPORT-FIRST'))[0];
+    verify($first['receiver_name']==='Người nhận <script>' && $first['total_before_tax']==='3.333333' && $first['items'][0]['decision_status']==='pending','Export snapshot, receiver or precise allocation incorrect.');
+    verify($first['items'][0]['product_name']===$lotBill['items'][0]['product_name'] && $first['items'][0]['source_number']==='EXPORT-SOURCE','Export must retain source snapshots.');
+    $exportPdfId=(string)$first['attachments'][0]['id'];
+    verify(httpManagement('export-file&id='.$exportPdfId)[1]===$pdf,'Export PDF download failed.');
+    verify(httpManagement('import-file&id='.$exportPdfId)[0]===404 && httpManagement('export-file&id='.$importPdfId)[0]===404,'PDF owner boundaries failed.');
+    $savedCookie=$cookie; $cookie=''; verify(httpManagement('export-file&id='.$exportPdfId)[0]===303,'Guest download must fail.'); $cookie=$savedCookie;
+    $pdo->prepare('UPDATE users SET is_super_admin=0 WHERE id=?')->execute([$actorId]);
+    foreach (['exports','export-create','export-file&id='.$exportPdfId] as $route) verify(httpManagement($route)[0]===403,'Non-admin export access must fail.');
+    $pdo->prepare('UPDATE users SET is_super_admin=1 WHERE id=?')->execute([$actorId]);
+    $bad=$confirmed; $bad['number']='EXPORT-OVERDRAW'; $line=$exportLine; $line['quantity']='3'; $bad['items']=json_encode([$line]);
+    verify(httpManagement('export-create',$bad)[0]===422,'Save must recheck stock after another confirmed export.');
+    $final=$confirmed; $final['number']='EXPORT-FINAL'; $line['quantity']='2'; $final['items']=json_encode([$line]);
+    verify(httpManagement('export-create',$final)[0]===200,'Final withdrawal failed.');
+    $last=array_values(array_filter(loadExports($pdo),static fn($row)=>$row['number']==='EXPORT-FINAL'))[0];
+    verify($last['total_before_tax']==='6.666667' && loadExportSources($pdo,$lotId)[0]['remaining_amount']==='0.000000' && loadExportSources($pdo,$lotId)[0]['remaining_quantity']==='0.000000','Final withdrawal must consume exact remaining value and quantity.');
+    $lotCreate['number']='TRANSFER-SOURCE'; verify(httpManagement('import-create',$lotCreate)[0]===200,'Transfer source failed.');
+    $transferLot=array_values(array_filter(loadImports($pdo),static fn($row)=>$row['number']==='TRANSFER-SOURCE'))[0]['items'][0];
+    $transferId=(string)$transferLot['id']; $transferSource=loadExportSources($pdo,$transferId)[0];
+    $transfer=$confirmed; $transfer['number']='EXPORT-TRANSFER'; $transfer['issue_type']='transfer'; $transfer['destination_warehouse']=$warehouseIds[1];
+    $transfer['items']=json_encode([['source_import_detail_id'=>$transferId,'version'=>$transferSource['version'],'quantity'=>'1']]);
+    verify(httpManagement('export-create',$transfer)[0]===200,'Confirmed transfer failed.');
+    $transferBill=array_values(array_filter(loadExports($pdo),static fn($row)=>$row['number']==='EXPORT-TRANSFER'))[0];
+    verify(count($transferBill['transfers'])===1,'Transfer must expose paired incoming receipt.');
+    $incoming=array_values(array_filter(loadImports($pdo),static fn($row)=>$row['id']===(string)$transferBill['transfers'][0]['id']))[0];
+    verify($incoming['warehouse_id']===$warehouseIds[1] && $incoming['status']==='confirmed' && $incoming['total_before_tax']===$transferBill['total_before_tax'] && (string)$incoming['items'][0]['source_export_detail_id']===(string)$transferBill['items'][0]['id'],'Paired import must preserve transfer lot, warehouse, amount and status.');
+    $transfer['number']='DRAFT-TRANSFER'; $transfer['status']='draft'; verify(httpManagement('export-create',$transfer)[0]===200,'Draft transfer failed.');
+    $draftTransfer=array_values(array_filter(loadExports($pdo),static fn($row)=>$row['number']==='DRAFT-TRANSFER'))[0];
+    verify(!$draftTransfer['transfers'] && loadExportSources($pdo,$transferId)[0]['remaining_quantity']==='2.000000','Draft transfer must not move stock or create incoming receipt.');
+    [, $body]=httpManagement('exports'); verify(str_contains($body,'EXPORT-TRANSFER') && str_contains($body,'Người nhận &lt;script&gt;') && !str_contains($body,'data-preview="true"'),'Export list must render real records and escape receivers.');
     $pdo->exec("CREATE TRIGGER test_audit_failure BEFORE INSERT ON audit_logs FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Test audit failure'");
+    $rollbackExport=$confirmed; $rollbackExport['number']='ROLLBACK-EXPORT'; $rollbackExport['items']=$transfer['items'];
+    $exportFilesBefore=count(glob($testRoot.'/storage/uploads/exports/*.pdf'));
+    verify(httpDecisionPdf($rollbackExport,$pdf,'rollback.pdf','export-create')[0]===503,'Export audit failure must abort save.');
+    verify(!(int)$pdo->query("SELECT COUNT(*) FROM export_bill WHERE number='ROLLBACK-EXPORT'")->fetchColumn() && count(glob($testRoot.'/storage/uploads/exports/*.pdf'))===$exportFilesBefore && loadExportSources($pdo,$transferId)[0]['remaining_quantity']==='2.000000','Failed export must roll back receipt, stock and PDF.');
+    $transfer['number']='ROLLBACK-TRANSFER'; $transfer['status']='confirmed'; $importCount=(int)$pdo->query('SELECT COUNT(*) FROM import_bill')->fetchColumn();
+    verify(httpManagement('export-create',$transfer)[0]===503 && (int)$pdo->query('SELECT COUNT(*) FROM import_bill')->fetchColumn()===$importCount && !(int)$pdo->query("SELECT COUNT(*) FROM export_bill WHERE number='ROLLBACK-TRANSFER'")->fetchColumn(),'Transfer and paired incoming receipt must roll back together.');
     $rollbackCreate = $draftCreate; $rollbackCreate['number'] = 'MUST-ROLLBACK';
     verify(httpManagement('import-create', $rollbackCreate)[0] === 503, 'Receipt creation must fail if audit insert fails.');
     verify(!(int) $pdo->query("SELECT COUNT(*) FROM import_bill WHERE number='MUST-ROLLBACK'")->fetchColumn(), 'Receipt must roll back together with audit.');
@@ -487,7 +551,7 @@ try {
     verify(managementSnapshot($pdo, 'warehouses', $warehouseIds[0]) === $currentWarehouse, 'Warehouse write must roll back when audit fails.');
     verify(httpManagement('employees', ['csrf_token' => $csrf, 'action' => 'delete', 'id' => $rollbackEmployeeId, 'version' => $rollbackEmployee['updated_at']])[0] === 503, 'Deletion must fail when audit insert fails.');
     verify(managementSnapshot($pdo, 'employees', $rollbackEmployeeId) === $rollbackEmployee, 'Audit failure must restore the deleted employee.');
-    echo "PASS: real HTTP saves, CSRF, validation, hashing, employee linking, warehouse grants/revocation, stale writes, rollback, self-lock protection and atomic audit history.\n";
+    echo "PASS: real HTTP management saves, CSRF, permissions, stale writes, import/export lot balances, rounding, paired transfers, PDFs, rollback and atomic audit history.\n";
 } finally {
     if (is_resource($server)) { proc_terminate($server); proc_close($server); }
     $source->exec("USE `$original`");

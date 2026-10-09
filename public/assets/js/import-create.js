@@ -2,33 +2,25 @@ const importCreateForm=document.getElementById('import-create-form'), importLine
 const xmlInput=document.getElementById('import-xml'), xmlReplaceDialog=document.getElementById('xml-replace-dialog');
 let xmlPending=null, xmlLoading=false;
 function importLineData(row) {return Object.fromEntries([...row.querySelectorAll('[data-field]')].map(input=>[input.dataset.field,input.value.trim()]));}
-function importScaled(value) {
-    if (!/^\d{1,14}([.,]\d{1,6})?$/.test(value)) throw new Error('Kiểm tra số lượng và tiền, không dùng dấu phân cách hàng nghìn.');
-    const [whole,part='']=value.replace(',','.').split('.');return BigInt(whole)*1000000n+BigInt(part.padEnd(6,'0'));
-}
-function importFormat(value) {
-    const whole=(value/1000000n).toString().replace(/\B(?=(\d{3})+(?!\d))/g,'.'),part=(value%1000000n).toString().padStart(6,'0').replace(/0+$/,'');
-    return whole+(part?','+part:'');
-}
 function updateImportTotals() {
     let total=0n,taxTotal=0n,valid=true;
     [...importLines.children].forEach((row,index)=>{
         row.querySelector('[data-line-number]').textContent=index+1;
         const item=importLineData(row), message=row.querySelector('[data-line-total]');
         try {
-            const quantity=item.tracking_mode==='none'?1000000n:importScaled(item.quantity);
+            const quantity=item.tracking_mode==='none'?1000000n:parseReceiptDecimal(item.quantity);
             if (item.tracking_mode==='quantity' && quantity===0n) throw new Error('Số lượng phải lớn hơn 0.');
-            const amount=item.amount_before_tax!==''?importScaled(item.amount_before_tax):quantity*importScaled(item.unit_price)/1000000n;
+            const amount=item.amount_before_tax!==''?parseReceiptDecimal(item.amount_before_tax):quantity*parseReceiptDecimal(item.unit_price)/1000000n;
             let tax;
-            if (item.tax_amount!=='') tax=importScaled(item.tax_amount);
-            else if (/^\d{1,2}([.,]\d{1,6})?%?$/.test(item.tax_code)) tax=amount*importScaled(item.tax_code.replace('%',''))/100000000n;
+            if (item.tax_amount!=='') tax=parseReceiptDecimal(item.tax_amount);
+            else if (/^\d{1,2}([.,]\d{1,6})?%?$/.test(item.tax_code)) tax=amount*parseReceiptDecimal(item.tax_code.replace('%',''))/100000000n;
             else if (['','KCT','KKKNT'].includes(item.tax_code.toUpperCase())) tax=0n;
             else throw new Error('Nhập số tiền thuế cho mã thuế này.');
             total+=amount;taxTotal+=tax;
-            message.textContent=`Trước thuế: ${importFormat(amount)} ₫ · Thuế: ${importFormat(tax)} ₫ · Tổng: ${importFormat(amount+tax)} ₫`;
+            message.textContent=`Trước thuế: ${formatReceiptDecimal(amount)} ₫ · Thuế: ${formatReceiptDecimal(tax)} ₫ · Tổng: ${formatReceiptDecimal(amount+tax)} ₫`;
         } catch (error) {valid=false;message.textContent=error.message;}
     });
-    for (const [id,value] of [['before',total],['tax',taxTotal],['after',total+taxTotal]]) document.getElementById('import-total-'+id).textContent=valid?importFormat(value)+' ₫':'Chưa đủ thông tin';
+    for (const [id,value] of [['before',total],['tax',taxTotal],['after',total+taxTotal]]) document.getElementById('import-total-'+id).textContent=valid?formatReceiptDecimal(value)+' ₫':'Chưa đủ thông tin';
 }
 function configureImportLine(row,fill=false) {
     const select=row.querySelector('[data-field=product_id]'), product=select.selectedOptions[0].dataset.product;

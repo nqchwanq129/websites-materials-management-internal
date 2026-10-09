@@ -4,6 +4,7 @@ require_once __DIR__ . '/decisions.php';
 require_once __DIR__ . '/products.php';
 require_once __DIR__ . '/imports.php';
 require_once __DIR__ . '/attachments.php';
+require_once __DIR__ . '/exports.php';
 
 function managementText(array $input, string $key, int $max, bool $required = false): string
 {
@@ -51,6 +52,7 @@ function managementSnapshot(PDO $pdo, string $page, string $id): ?array
 function saveManagement(PDO $pdo, string $page, string $actorId, array $input, array $files = []): string
 {
     if ($page === 'import-create') return saveImport($pdo, $actorId, $input, $files);
+    if ($page === 'export-create') return saveExport($pdo, $actorId, $input, $files);
     if ($page === 'decisions') return saveDecision($pdo, $actorId, $input, $files);
     if (array_key_exists($page, productPages())) return saveProduct($pdo, $actorId, $input, productPages()[$page]);
     if (!in_array($page, ['accounts', 'employees', 'warehouses'], true)) throw new DomainException('Không được thay đổi nhật ký.');
@@ -226,7 +228,11 @@ function loadManagement(PDO $pdo, string $page): array
         $data['warehouseStatuses'][(string) $row['id']] = $row['status'];
     }
     // ponytail: client-side filtering loads complete lists; move filters/pagination to SQL when data volume grows.
-    if ($page === 'import-create') {
+    if ($page === 'export-create') {
+        $data['sources'] = loadExportSources($pdo);
+    } elseif ($page === 'exports') {
+        $data['exports'] = loadExports($pdo);
+    } elseif ($page === 'import-create') {
         $data['products'] = $pdo->query("SELECT id,code,name,category,unit,specifications,tracking_mode,updated_at AS version FROM products WHERE status='active' ORDER BY name,id")->fetchAll();
         $data['suppliers'] = $pdo->query("SELECT id,name,tax_code,address,phone,email FROM suppliers WHERE status='active' ORDER BY name,id")->fetchAll();
     } elseif ($page === 'imports') {

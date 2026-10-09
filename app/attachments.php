@@ -17,7 +17,7 @@ function receivePdf(array $files): ?array
 function storePdfAttachment(PDO $pdo, ?array $pdf, string $owner, string $id, string $actor): ?string
 {
     if ($pdf === null) return null;
-    $folder = ['decision_id' => 'decisions', 'import_bill_id' => 'imports'][$owner] ?? throw new InvalidArgumentException('Invalid PDF owner.');
+    $folder = ['decision_id' => 'decisions', 'import_bill_id' => 'imports', 'export_bill_id' => 'exports'][$owner] ?? throw new InvalidArgumentException('Invalid PDF owner.');
     $directory = dirname(__DIR__) . '/storage/uploads/' . $folder;
     if (!is_dir($directory) && !mkdir($directory, 0770, true) && !is_dir($directory)) throw new RuntimeException('Cannot create upload directory.');
     $relative = $folder . '/' . bin2hex(random_bytes(16)) . '.pdf';
@@ -29,7 +29,7 @@ function storePdfAttachment(PDO $pdo, ?array $pdf, string $owner, string $id, st
 }
 function downloadPdfAttachment(PDO $pdo, mixed $attachmentId, string $owner): never
 {
-    $folder = ['decision_id' => 'decisions', 'import_bill_id' => 'imports'][$owner] ?? throw new InvalidArgumentException('Invalid PDF owner.');
+    $folder = ['decision_id' => 'decisions', 'import_bill_id' => 'imports', 'export_bill_id' => 'exports'][$owner] ?? throw new InvalidArgumentException('Invalid PDF owner.');
     try { $id = managementId($attachmentId); }
     catch (DomainException $error) { http_response_code(404); exit('Không tìm thấy file.'); }
     $stmt = $pdo->prepare("SELECT original_name,storage_path FROM attachments WHERE id=? AND $owner IS NOT NULL AND mime_type='application/pdf'");

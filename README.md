@@ -197,3 +197,15 @@ XML upload reads one VND `DLHDon` invoice, including namespaces, seller fields, 
 Optional PDF invoices use the existing `attachments.import_bill_id`, with the same extension/MIME/signature validation and download protection as decision PDFs. Files are saved outside public in `storage/uploads/imports/` and are excluded from commits. Receipt/product/supplier/audit writes are one transaction; a failure removes any newly uploaded PDF as well. No schema migration or sample business insert is needed. Keep database and uploaded documents together in backups.
 
 Checks: `php tests/home.php --import-create`, `php tests/management.php` (isolated database), `php tests/auth.php`, `node tests/home-ui.mjs`.
+
+### Export receipts
+
+`index.php?page=exports` and `index.php?page=export-create` read and create real export receipts for super admins. The list supports searches by number, receiver, reason and line items, warehouse/type/status and date filters, sorting, 10-row pagination and detail dialogs with fixed headings/footers. Optional PDF documents use `attachments.export_bill_id`, private files in `storage/uploads/exports/` and the protected `export-file` endpoint.
+
+Apply `database/2026-10-10-export-receiver.sql` once to an existing database before using these pages. This adds nullable `export_bill.receiver_name`; older receipts are preserved. It has already been applied to this local database.
+
+Select 1–200 lines from confirmed import lots in an active warehouse, with active products tracking a known quantity. The server checks lot versions, dates and current availability again under the existing management write lock. Repeated lines share the same lot balance. Stored lot values are allocated with six-decimal precision; the last withdrawal takes the exact remaining value to preserve invoice rounding. Prices and product snapshots come from the source lot and cannot be overridden. New lines start with pending decisions. Untracked services and imports missing quantities cannot be exported through this quantity-based schema.
+
+Drafts do not reserve stock. Confirmed exports reduce stock; a confirmed warehouse transfer also creates a linked confirmed import in its active destination warehouse. Both receipts, line items, attachment metadata and audit events commit together; failures roll back and remove any new PDF. Draft editing, confirmation of existing drafts and cancellation are not implemented in this list/create stage. Uploaded files remain excluded from Git; back up the database and uploads together.
+
+Checks: `php tests/home.php --exports`, `php tests/home.php --export-create`, `php tests/management.php`, `php tests/auth.php`, `node tests/home-ui.mjs`. Database writes in the management check use an isolated test database, including rounding, overdraw prevention, paired transfers and rollback scenarios.

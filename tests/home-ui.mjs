@@ -931,10 +931,75 @@ try {
     assert.equal(uploadCheck.inputEnabled,true);
     assert.equal(uploadCheck.invoiceNumber,'00000548');
     assert.equal(uploadCheck.total,'2.390.000 ₫');
+    for (const route of ['exports','export-create']) {
+        const render=spawnSync(php,['tests/home.php','--'+route,'--render'],{encoding:'utf8',windowsHide:true});
+        assert.equal(render.status,0,render.stderr);
+        await page('Page.navigate',{url:process.env.LOGIN_URL||'http://localhost/qlvt-remake/public/'});
+        for(let i=0;i<100;i++) {
+            if(await evaluate('document.readyState==="complete" && Boolean(document.getElementById("login-form"))'))break;
+            await new Promise(resolve=>setTimeout(resolve,100));
+        }
+        const frame=await page('Page.getFrameTree');
+        await page('Page.setDocumentContent',{frameId:frame.frameTree.frame.id,html:render.stdout});
+        for(let i=0;i<100;i++) {
+            if(await evaluate(`document.readyState==="complete" && typeof ${route==='exports'?'filterExports':'updateExportTotals'}==="function"`))break;
+            await new Promise(resolve=>setTimeout(resolve,100));
+        }
+        if(route==='exports') {
+            assert.equal(await evaluate('document.querySelectorAll("[data-export]:not([hidden])").length'),10);
+            await evaluate('exportNext.click()');
+            assert.equal(await evaluate('document.querySelectorAll("[data-export]:not([hidden])").length'),2);
+            await evaluate('exportStatus.value="confirmed";filterExports()');
+            assert.equal(await evaluate('document.querySelectorAll("[data-export]:not([hidden])").length'),4);
+            await evaluate('document.getElementById("export-reset").click();exportWarehouse.value="1";filterExports()');
+            assert.equal(await evaluate('document.querySelectorAll("[data-export]:not([hidden])").length'),6);
+            await evaluate('document.getElementById("export-reset").click();exportType.value="transfer";filterExports()');
+            assert.equal(await evaluate('document.querySelectorAll("[data-export]:not([hidden])").length'),3);
+            await evaluate('document.querySelector("[data-export]:not([hidden]) .export-details").click()');
+            assert.equal(await evaluate('document.getElementById("export-transfers-section").hidden'),false);
+            await evaluate('exportDialog.close();document.getElementById("export-reset").click();exportSearch.value="nguoi nhan <script> 1";filterExports()');
+            assert.equal(await evaluate('document.querySelectorAll("[data-export]:not([hidden])").length'),4);
+            await evaluate('document.getElementById("export-reset").click();exportStart.value="2026-10-12";exportEnd.value="2026-10-01";filterExports()');
+            assert.equal(await evaluate('document.getElementById("export-error").hidden'),false);
+            await evaluate('document.getElementById("export-reset").click();openExport(JSON.parse(exportRows.find(row=>JSON.parse(row.dataset.export).id==="1").dataset.export))');
+            assert.equal(await evaluate('document.querySelectorAll("#export-item-rows tr").length'),14);
+            assert.equal(await evaluate('document.getElementById("export-detail-receiver_name").textContent'),'Người nhận <script> 1');
+            assert.equal(await evaluate('document.querySelector("#export-attachments a").getAttribute("href")'),'index.php?page=export-file&id=1');
+            assert.equal(await evaluate('exportDialog.querySelectorAll("script").length'),0);
+        } else {
+            assert.equal(await evaluate('[...exportCreateForm.elements.warehouse.options].some(o=>o.value==="3")'),false);
+            await evaluate('exportCreateForm.elements.warehouse.value="1";exportCreateForm.elements.issued_date.value="2026-10-10";updateExportOptions()');
+            assert.equal(await evaluate('exportLines.firstElementChild.querySelector("select").options.length'),2,'Only dated lots at the selected warehouse can be selected.');
+            await evaluate('exportLines.firstElementChild.querySelector("select").value="1";showExportSource(exportLines.firstElementChild);exportLines.firstElementChild.querySelector("[data-field=quantity]").value="1";updateExportTotals()');
+            assert.equal(await evaluate('document.getElementById("export-total").textContent'),'3,333333 ₫');
+            await evaluate('addExportLine();exportLines.lastElementChild.querySelector("select").value="1";showExportSource(exportLines.lastElementChild);exportLines.lastElementChild.querySelector("[data-field=quantity]").value="2";updateExportTotals()');
+            assert.equal(await evaluate('document.getElementById("export-total").textContent'),'10 ₫','Final line must allocate invoice rounding exactly.');
+            assert.equal(await evaluate('exportLines.lastElementChild.querySelector("[data-line-total]").textContent.includes("6,666667")'),true);
+            await evaluate('exportLines.lastElementChild.querySelector("[data-field=quantity]").value="3";updateExportTotals()');
+            assert.equal(await evaluate('document.getElementById("export-stock-state").textContent'),'Cần kiểm tra');
+            await evaluate('exportCreateForm.elements.warehouse.value="2";updateExportOptions()');
+            assert.equal(await evaluate('[...exportLines.children].every(row=>!row.querySelector("select").value)'),true,'Changing warehouse must clear source lots.');
+            await evaluate('exportCreateForm.elements.warehouse.value="1";exportCreateForm.elements.issue_type.value="transfer";updateExportOptions()');
+            assert.equal(await evaluate('exportCreateForm.elements.destination_warehouse.required && !exportCreateForm.elements.destination_warehouse.disabled && exportCreateForm.elements.destination_warehouse.querySelector("option[value=\\"1\\"]").disabled'),true);
+            await evaluate('exportCreateForm.elements.destination_warehouse.value="2";exportCreateForm.elements.receiver_name.value="Người nhận kiểm thử";exportCreateForm.elements.reason.value="Điều chuyển kiểm thử";exportLines.firstElementChild.querySelector("select").value="1";showExportSource(exportLines.firstElementChild);exportLines.lastElementChild.querySelector(".remove-export-line").click();updateExportTotals();exportCreateForm.requestSubmit()');
+            assert.equal(await evaluate('document.getElementById("export-create-notice").hidden'),false,'Export preview must not write business data.');
+            assert.equal(await evaluate('JSON.parse(exportCreateForm.elements.items.value)[0].source_import_detail_id'),'1');
+        }
+        for(const [width,height] of [[1440,1000],[390,844],[320,568],[844,390]]) {
+            await page('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
+            await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+            assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,route+' outer overflow at '+width);
+            if(route==='exports') {
+                assert.equal(await evaluate(`(()=>{const body=exportDialog.querySelector('.account-dialog-body'),header=exportDialog.querySelector('header'),footer=exportDialog.querySelector('footer');const before=[header.getBoundingClientRect().top,footer.getBoundingClientRect().top];body.scrollTop=body.scrollHeight;return before[0]===header.getBoundingClientRect().top && before[1]===footer.getBoundingClientRect().top && exportDialog.scrollWidth<=exportDialog.clientWidth && exportDialog.scrollHeight<=exportDialog.clientHeight+1 && footer.getBoundingClientRect().bottom<=innerHeight;})()`),true,'Export detail heading/footer must remain fixed.');
+            }
+            const shot=await page('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+            writeFileSync(join(outputDir,`${route}-${width}x${height}.png`),Buffer.from(shot.data,'base64'));
+        }
+    }
     assert.deepEqual(pageErrors, [], 'Browser errors.');
     assert.deepEqual(failedRequests, [], 'Asset loading errors.');
     assert.equal(postRequests, 0, 'Dashboard sample controls must not submit business data.');
-    console.log(`PASS: dashboard/sidebar, accounts/employees/warehouses, suppliers, decisions, five reports with XLSX/print, audit filters, notifications and responsive layout.\nScreenshots: ${outputDir}`);
+    console.log(`PASS: dashboard/sidebar, management, reports with XLSX/print, import/export forms and filters, lot allocation, notifications and responsive layout.\nScreenshots: ${outputDir}`);
     await send('Browser.close');
 } finally {
     socket?.close();
