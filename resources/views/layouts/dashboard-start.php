@@ -7,7 +7,7 @@ $navigation = [
     ['warehouse', 'Kho hàng', [['Danh sách kho', ''], ['Tồn kho', '']]],
     ['file', 'Quyết định', [['Danh sách quyết định', ''], ['Tăng vật tư', ''], ['Cấp phát vật tư', ''], ['Điều chuyển vật tư', ''], ['Giảm vật tư', '']]],
     ['chart', 'Báo cáo & thống kê', [['Nhập · xuất · tồn', ''], ['Báo cáo vật tư', ''], ['Báo cáo phụ tùng', ''], ['Báo cáo công cụ, dụng cụ', ''], ['Báo cáo tài sản cố định', '']]],
-    ['users', 'Danh mục', [['Nhà cung cấp', ''], ['Nhân viên', '']]],
+    ['users', 'Danh mục', [['Nhà cung cấp', ''], ['Nhân viên', (int) $user['is_super_admin'] === 1 ? 'index.php?page=employees' : '']]],
     ['shield', 'Hệ thống', [['Tài khoản & phân quyền', (int) $user['is_super_admin'] === 1 ? 'index.php?page=accounts' : ''], ['Nhật ký thao tác', '']]],
 ];
 $icons = [
@@ -43,7 +43,7 @@ $icon = static fn(string $name): string => '<svg class="icon" aria-hidden="true"
     <link rel="icon" href="assets/images/company-logo.png" type="image/png">
     <link rel="stylesheet" href="assets/css/dashboard.css">
     <script src="assets/js/dashboard.js" defer></script>
-    <?php if ($activePage === 'accounts'): ?><link rel="stylesheet" href="assets/css/accounts.css"><script src="assets/js/accounts.js" defer></script><?php endif; ?>
+    <?php if (in_array($activePage, ['accounts', 'employees'], true)): ?><link rel="stylesheet" href="assets/css/accounts.css"><script src="assets/js/<?= $activePage ?>.js" defer></script><?php endif; ?>
 </head>
 <body>
 <svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -57,11 +57,11 @@ $icon = static fn(string $name): string => '<svg class="icon" aria-hidden="true"
         <nav class="navigation" aria-label="Điều hướng chính">
         <a class="nav-item<?= $activePage === 'home' ? ' active' : '' ?>" href="index.php?page=home#overview"<?= $activePage === 'home' ? ' aria-current="page"' : '' ?> data-nav-home><?= $icon('grid') ?><span>Tổng quan</span></a>
         <?php foreach ($navigation as [$glyph, $group, $links]): ?>
-            <details class="nav-group"<?= $group === ($activePage === 'accounts' ? 'Hệ thống' : 'Hàng hóa') ? ' open' : '' ?>>
+            <details class="nav-group"<?= $group === ($activePage === 'accounts' ? 'Hệ thống' : ($activePage === 'employees' ? 'Danh mục' : 'Hàng hóa')) ? ' open' : '' ?>>
                 <summary class="nav-item"><?= $icon($glyph) ?><span><?= $group ?></span><span class="nav-chevron"><?= $icon('chevron') ?></span></summary>
                 <div class="nav-children">
                 <?php foreach ($links as [$label, $target]): ?>
-                    <?php if ($target): ?><a class="nav-child<?= $target === 'index.php?page=accounts' && $activePage === 'accounts' ? ' active' : '' ?>" href="<?= $target ?>"<?= $target === 'index.php?page=accounts' && $activePage === 'accounts' ? ' aria-current="page"' : '' ?>><?= $label ?></a>
+                    <?php if ($target): ?><a class="nav-child<?= $target === 'index.php?page=' . $activePage ? ' active' : '' ?>" href="<?= $target ?>"<?= $target === 'index.php?page=' . $activePage ? ' aria-current="page"' : '' ?>><?= $label ?></a>
                     <?php else: ?><button class="nav-child" type="button" data-feature="<?= escapeHtml($label) ?>"><?= $label ?></button><?php endif; ?>
                 <?php endforeach; ?>
                 </div>

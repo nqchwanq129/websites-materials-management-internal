@@ -5,7 +5,7 @@ require dirname(__DIR__) . '/app/bootstrap.php';
 
 $page = is_string($_GET['page'] ?? null) ? $_GET['page'] : 'login';
 $method = $_SERVER['REQUEST_METHOD'];
-if (!in_array($page, ['login', 'home', 'accounts', 'logout'], true)) {
+if (!in_array($page, ['login', 'home', 'accounts', 'employees', 'logout'], true)) {
     http_response_code(404);
     exit('Trang không tồn tại.');
 }
@@ -66,18 +66,18 @@ if (isset($_SESSION['user_id'])) {
         exit('Hệ thống tạm thời không khả dụng. Vui lòng thử lại sau.');
     }
 }
-if (in_array($page, ['home', 'accounts'], true)) {
+if (in_array($page, ['home', 'accounts', 'employees'], true)) {
     if ($user === null) redirectTo('login');
-    if ($page === 'accounts' && (int) $user['is_super_admin'] !== 1) {
+    if ($page !== 'home' && (int) $user['is_super_admin'] !== 1) {
         http_response_code(403);
-        exit('Bạn không có quyền truy cập trang quản lý tài khoản.');
+        exit('Bạn không có quyền truy cập trang quản lý này.');
     }
-    if ($page === 'accounts' && $method !== 'GET') {
+    if ($page !== 'home' && $method !== 'GET') {
         header('Allow: GET');
         http_response_code(405);
-        exit('Trang giao diện mẫu chưa hỗ trợ lưu tài khoản.');
+        exit('Trang giao diện mẫu chưa hỗ trợ lưu dữ liệu.');
     }
-    require dirname(__DIR__) . '/resources/views/' . ($page === 'accounts' ? 'accounts/index.php' : 'dashboard/home.php');
+    require dirname(__DIR__) . '/resources/views/' . ($page === 'home' ? 'dashboard/home.php' : $page . '/index.php');
     exit;
 }
 if ($user !== null) redirectTo('home');

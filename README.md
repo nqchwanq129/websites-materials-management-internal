@@ -74,6 +74,15 @@ The browser check also covers account filters, forms and warehouse role selectio
 Account lists show at most **10 accounts per page**. Searching or changing a
 filter resets to the first page; pagination applies to the matching accounts.
 
+Super admins can open **Danh mục → Nhân viên** at `public/index.php?page=employees`.
+The employee UI uses 12 sample records with code, full name, email, phone,
+required workplace warehouse and active/inactive status. It shows linked
+accounts as information; account links and access roles are managed separately.
+Search, status/warehouse/account-link filters and 10-row pagination work locally.
+Create/edit and activate/deactivate dialogs are previews only and make no writes.
+The route rejects POST requests. Run `php tests/home.php --employees` for a
+database-free rendering check; `node tests/home-ui.mjs` also checks employee UI.
+
 Form dialogs keep the title/description and bottom Cancel/Save actions fixed.
 Only the main form body scrolls. Use this same layout for future create/edit
 dialogs, including on short screens and mobile landscape.

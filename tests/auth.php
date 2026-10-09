@@ -77,6 +77,7 @@ try {
     check(str_contains(implode('\n', $headers), 'HttpOnly') && str_contains(implode('\n', $headers), 'SameSite=Lax'), 'Session cookie must be protected.');
     check(request('index.php?page=home')[0] === 303, 'Guests must not access the protected page.');
     check(request('index.php?page=accounts')[0] === 303, 'Guests must not access account management.');
+    check(request('index.php?page=employees')[0] === 303, 'Guests must not access employee management.');
     check(request('index.php', ['username' => $username, 'password' => $password])[0] === 303, 'Missing CSRF token should redirect to login.');
     [$status, $body] = request('index.php?page=home');
     check($status === 303, 'Missing CSRF token must not create a login session.');
@@ -86,9 +87,12 @@ try {
     check($status === 200 && str_contains($body, 'TỔNG QUAN HOẠT ĐỘNG') && str_contains($body, $username) && !str_contains($body, $password), 'Protected dashboard did not authenticate correctly.');
     $logoutToken = csrf($body);
     check(request('index.php?page=accounts')[0] === 200, 'Super admin should access account UI.');
+    check(request('index.php?page=employees')[0] === 200, 'Super admin should access employee UI.');
     check(request('index.php?page=accounts', ['csrf_token' => $logoutToken])[0] === 405, 'Account preview must reject writes.');
+    check(request('index.php?page=employees', ['csrf_token' => $logoutToken])[0] === 405, 'Employee preview must reject writes.');
     $pdo->prepare('UPDATE users SET is_super_admin=0 WHERE id=?')->execute([$userId]);
     check(request('index.php?page=accounts')[0] === 403, 'Non-admin users must not access account management.');
+    check(request('index.php?page=employees')[0] === 403, 'Non-admin users must not access employee management.');
     $pdo->prepare('UPDATE users SET is_super_admin=1 WHERE id=?')->execute([$userId]);
     check(request('index.php?page=logout')[0] === 403, 'GET must not log out.');
     check(request('index.php?page=logout', ['csrf_token' => 'invalid'])[0] === 403, 'Invalid CSRF must not log out.');

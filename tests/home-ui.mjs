@@ -252,10 +252,79 @@ try {
     assert.equal(await evaluate('document.getElementById("account-page-previous").disabled && document.getElementById("account-page-next").disabled'), true);
     assert.equal(await evaluate('document.querySelector(".account-empty").hidden'), false);
     await evaluate('accountRows.splice(6).forEach(row=>row.remove()); document.getElementById("account-search").value=""; filterAccounts()');
+    const employeeRender = spawnSync(php, ['tests/home.php', '--employees', '--render'], { encoding: 'utf8', windowsHide: true });
+    assert.equal(employeeRender.status, 0, employeeRender.stderr);
+    await page('Page.navigate', { url: process.env.LOGIN_URL || 'http://localhost/qlvt-remake/public/' });
+    for (let i = 0; i < 100; i++) {
+        if (await evaluate('document.readyState === "complete" && Boolean(document.getElementById("login-form"))')) break;
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    const employeeFrame = await page('Page.getFrameTree');
+    await page('Page.setDocumentContent', { frameId: employeeFrame.frameTree.frame.id, html: employeeRender.stdout });
+    for (let i = 0; i < 100; i++) {
+        if (await evaluate('document.readyState === "complete" && typeof filterEmployees === "function"')) break;
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    assert.equal(await evaluate('typeof filterEmployees'), 'function');
+    assert.equal(await evaluate('document.querySelectorAll("[data-employee]:not([hidden])").length'), 10);
+    await evaluate('document.getElementById("employee-page-next").click()');
+    assert.equal(await evaluate('document.querySelectorAll("[data-employee]:not([hidden])").length'), 2);
+    assert.equal(await evaluate('document.getElementById("employee-page-next").disabled'), true);
+    await evaluate('document.getElementById("employee-search").value="nguyen"; document.getElementById("employee-search").dispatchEvent(new Event("input"))');
+    assert.equal(await evaluate('document.getElementById("employee-page-label").textContent'), '1 / 1');
+    assert.equal(await evaluate('document.querySelectorAll("[data-employee]:not([hidden])").length'), 2);
+    await evaluate('document.getElementById("employee-search").value=""; document.getElementById("employee-status").value="inactive"; document.getElementById("employee-warehouse").value="central"; document.getElementById("employee-account").value="linked"; filterEmployees()');
+    assert.equal(await evaluate('document.querySelectorAll("[data-employee]:not([hidden])").length'), 1);
+    await evaluate('document.getElementById("employee-search").value="missing-employee"; filterEmployees()');
+    assert.equal(await evaluate('document.querySelector(".employee-empty").hidden'), false);
+    assert.equal(await evaluate('document.getElementById("employee-page-next").disabled && document.getElementById("employee-page-previous").disabled'), true);
+    await evaluate('document.getElementById("employee-search").value=""; document.getElementById("employee-status").value=""; document.getElementById("employee-warehouse").value=""; document.getElementById("employee-account").value=""; filterEmployees(); document.getElementById("create-employee").click()');
+    assert.equal(await evaluate('document.getElementById("employee-form").checkValidity()'), false, 'Require employee code, name and warehouse.');
+    await evaluate('document.getElementById("edit-employee-code").value="NV013"; document.getElementById("edit-employee-name").value="Sample employee"; document.getElementById("edit-employee-warehouse").value="central"; document.getElementById("edit-employee-email").value="invalid-email"');
+    assert.equal(await evaluate('document.getElementById("employee-form").checkValidity()'), false, 'Validate email format.');
+    await evaluate('document.getElementById("edit-employee-email").value=""; document.getElementById("employee-form").requestSubmit()');
+    assert.equal(await evaluate('document.getElementById("employee-dialog").open'), false);
+    assert.equal(await evaluate('document.getElementById("employee-notice").hidden'), false);
+    assert.equal(await evaluate('document.querySelectorAll("[data-employee]").length'), 12, 'Preview must not write employee records.');
+    await evaluate('document.querySelector(".edit-employee").click()');
+    assert.equal(await evaluate('document.getElementById("edit-employee-code").value'), 'NV001');
+    assert.equal(await evaluate('document.getElementById("employee-linked-account").textContent'), 'Tài khoản: minhanh');
+    await evaluate('document.getElementById("edit-employee-status").value="inactive"; document.getElementById("edit-employee-status").dispatchEvent(new Event("change"))');
+    assert.equal(await evaluate('document.getElementById("employee-inactive-note").hidden'), false);
+    await evaluate('document.querySelector(".close-employee-dialog").click(); document.querySelector(".employee-state-preview").click()');
+    assert.equal(await evaluate('document.getElementById("employee-state-dialog").open'), true);
+    await evaluate('document.querySelector("#employee-state-dialog button[value=cancel]").click()');
+    for (const [width, height] of [[1440, 1000], [1280, 800], [390, 844], [320, 568], [844, 390]]) {
+        await page('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+        await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+        assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, `Employee page overflow at ${width}px.`);
+        const shot = await page('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+        writeFileSync(join(outputDir, `employees-${width}x${height}.png`), Buffer.from(shot.data, 'base64'));
+        for (const editing of [false, true]) {
+            await evaluate(editing ? 'document.querySelector(".edit-employee").click()' : 'document.getElementById("create-employee").click()');
+            assert.deepEqual(await evaluate(`(() => {
+                const dialog = document.getElementById('employee-dialog');
+                const body = dialog.querySelector('.account-dialog-body');
+                const heading = dialog.querySelector('.account-dialog-heading');
+                const footer = dialog.querySelector('.account-dialog-footer');
+                const before = [heading.getBoundingClientRect().top, footer.getBoundingClientRect().top];
+                body.scrollTop = body.scrollHeight;
+                return { fixed: before[0] === heading.getBoundingClientRect().top && before[1] === footer.getBoundingClientRect().top,
+                    fits: dialog.scrollHeight <= dialog.clientHeight + 1 && dialog.scrollWidth <= dialog.clientWidth,
+                    actionsVisible: [...footer.querySelectorAll('button'), heading.querySelector('button')].every(button => { const rect = button.getBoundingClientRect(); return rect.top >= 0 && rect.bottom <= innerHeight; }) };
+            })()`), { fixed: true, fits: true, actionsVisible: true }, `Employee dialog must keep header/actions visible at ${width}x${height}.`);
+            if (!editing) {
+                await evaluate('document.querySelector("#employee-dialog .account-dialog-body").scrollTop=0');
+                const formShot = await page('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+                writeFileSync(join(outputDir, `employee-form-${width}x${height}.png`), Buffer.from(formShot.data, 'base64'));
+            }
+            await evaluate('document.querySelector(".close-employee-dialog").click()');
+        }
+    }
     assert.deepEqual(pageErrors, [], 'Browser errors.');
     assert.deepEqual(failedRequests, [], 'Asset loading errors.');
     assert.equal(postRequests, 0, 'Dashboard sample controls must not submit business data.');
-    console.log(`PASS: dashboard/sidebar, account filters, per-warehouse roles, account forms, preview-only actions and responsive layout.\nScreenshots: ${outputDir}`);
+    console.log(`PASS: dashboard/sidebar, accounts and employee filters/pagination/forms, preview-only actions and responsive layout.\nScreenshots: ${outputDir}`);
     await send('Browser.close');
 } finally {
     socket?.close();
