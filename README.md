@@ -121,7 +121,7 @@ Search, status filters and pagination show 10 warehouses per page. Create/edit a
 activate/deactivate actions validate unique codes, reject stale edits and record
 before/after audit history in the same transaction. Inactive warehouses deny access
 and cannot receive new employee assignments or new grants; existing history and
-grants are preserved for reactivation. Stock reporting remains a future function.
+grants are preserved for reactivation. Stock reports currently use labeled sample data.
 Run `php tests/home.php --warehouses` for fixture rendering and
 `php tests/management.php` for isolated database checks; the browser check includes
 warehouse forms, filters, pagination and fixed dialog headers/footers.
@@ -163,3 +163,13 @@ and is not part of the project history.
 Decision list: `index.php?page=decisions` reads real database records (super admin only), with search, type/warehouse/link filters and 10 rows per page. Details show linked import and export lines; quantities retain DECIMAL precision. Only the list remains in the Decisions sidebar group. Create/edit decisions and select existing receipt lines in the same dialog. New links require confirmed receipts, a matching active warehouse, and pending lines without another decision. Removing a selection returns that line to pending. Concurrent decision/line changes reject stale forms; changes and attachments are audited atomically.
 
 Decision PDF attachments use the existing `attachments` table (`decision_id`, `original_name`, `storage_path`, `mime_type`, `created_by`); no schema change is needed. Upload one PDF per save (maximum 2 MiB), with server-side extension, MIME and signature validation. Files are appended to existing attachments and stored with random names in `storage/uploads/decisions/`, outside the public directory and excluded from Git. Download through `index.php?page=decision-file&id=...` requires an active super-admin session. Back up both the database and `storage/uploads/`; a source-code commit does not contain uploaded documents. Failed database/audit writes roll back metadata and remove the newly uploaded file.
+
+## Reports preview
+
+`index.php?page=reports&kind=inventory` provides five reports: inventory, materials, parts, tools and fixed assets. All business data comes from `resources/data/reports-preview.php`, never from MySQL; authentication still uses the existing login. Report pages and exported workbooks visibly identify sample data.
+
+Date, warehouse, category, stock-state and product filters run against the same ledger calculation in `app/reports.php`; only confirmed receipts count. Opening stock is imports minus exports before the start date; closing stock adds period imports and subtracts period exports. Rows are grouped by product ID and warehouse rather than names, quantities remain separate by unit, and tracking_mode=none displays no quantity. BCMath preserves DECIMAL precision. Value balances use amount_before_tax from receipt lines; tools/assets do not imply depreciation or accounting allocations absent from the new schema. Product specifications are shown; the old serial field is not exposed because it is absent from products in the new database.
+
+Each report supports 10-row pagination, movement details with fixed dialog header/footer, a monthly value chart, printing all filtered rows and genuine XLSX export with report and movement worksheets. Local SheetJS CE 0.20.3 (Apache-2.0) writes XLSX without runtime CDN requests. Large numbers exceeding Excel precision remain text. Excel layouts follow the new reports and do not reproduce the old fixed spreadsheet templates.
+
+Checks: `php tests/reports.php`, `php tests/home.php --reports`, `php tests/home.php --reports --report-kind=assets`, `php tests/auth.php`, and `node tests/home-ui.mjs`. The browser check verifies all five pages, genuine XLSX download/round-trip, pagination, print coverage and responsive dialogs. Replace the preview data source with validated, authorized DB queries when the report UI and business rules are approved; no database migration or sample business inserts have been made.

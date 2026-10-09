@@ -1,7 +1,7 @@
 // Run with Node 22+ and XAMPP: node tests/home-ui.mjs. Renders samples without database.
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once } from 'node:events';
@@ -654,10 +654,72 @@ try {
         writeFileSync(join(outputDir, `decision-editor-${width}x${height}.png`), Buffer.from(shot.data, 'base64'));
         await evaluate('decisionEditor.close()');
     }
+    await send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: outputDir });
+    for (const kind of ['inventory', 'materials', 'parts', 'tools', 'assets']) {
+        const reportRender = spawnSync(php, ['tests/home.php', '--reports', '--report-kind=' + kind, '--render'], { encoding: 'utf8', windowsHide: true });
+        assert.equal(reportRender.status, 0, reportRender.stderr);
+        await page('Page.navigate', { url: process.env.LOGIN_URL || 'http://localhost/qlvt-remake/public/' });
+        for (let i = 0; i < 100; i++) {
+            if (await evaluate('document.readyState === "complete" && Boolean(document.getElementById("login-form"))')) break;
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        const reportFrame = await page('Page.getFrameTree');
+        await page('Page.setDocumentContent', { frameId: reportFrame.frameTree.frame.id, html: reportRender.stdout });
+        for (let i = 0; i < 100; i++) {
+            if (await evaluate('document.readyState === "complete" && typeof paginateReport === "function" && typeof XLSX === "object"')) break;
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        const count = kind === 'inventory' ? 60 : 12;
+        assert.equal(await evaluate('document.querySelectorAll("[data-report-row]:not([hidden])").length'), 10);
+        assert.equal(await evaluate('document.querySelectorAll(".nav-group[open] .nav-child").length'), 5, 'All report navigation entries must be available.');
+        assert.equal(await evaluate('document.querySelector(".nav-child[aria-current=page]").getAttribute("href").endsWith("kind=" + reportData.filters.kind)'), true);
+        await evaluate('document.getElementById("report-next").click()');
+        assert.equal(await evaluate('document.querySelectorAll("[data-report-row]:not([hidden])").length'), kind === 'inventory' ? 10 : 2);
+        assert.equal(await evaluate(`(() => {
+            const book=buildReportWorkbook(); const data=XLSX.write(book,{type:'base64',bookType:'xlsx'}); const read=XLSX.read(data,{type:'base64'});
+            const rows=XLSX.utils.sheet_to_json(read.Sheets['Bao cao'],{header:1});
+            return rows[1][0].includes('DỮ LIỆU MẪU') && rows.length === ${count + 7} && read.SheetNames.length === 2;
+        })()`), true, 'Excel must include all filtered pages and sample label.');
+        assert.equal(await evaluate("reportExcelValue('9007199254740991.123456')"), '9007199254740991.123456', 'Large DECIMAL values must remain text in Excel.');
+        if (kind === 'inventory') {
+            assert.equal(await evaluate(`(() => { const row=reportData.report.rows[0], name=row.name; row.name='=HYPERLINK("https://example.invalid")'; const cell=buildReportWorkbook().Sheets['Bao cao'].B7; row.name=name; return cell.t==='s' && !cell.f; })()`), true, 'Excel names must remain text, never formulas.');
+            await evaluate('document.getElementById("export-report").click()');
+            const filename = await evaluate('`VISHIPEL_MAU_${reportData.filters.kind}_${reportData.filters.from}_${reportData.filters.to}.xlsx`');
+            for (let i = 0; i < 50 && !existsSync(join(outputDir, filename)); i++) await new Promise(resolve => setTimeout(resolve, 100));
+            assert.equal(existsSync(join(outputDir, filename)), true, 'Excel download did not complete.');
+            assert.equal(readFileSync(join(outputDir, filename)).subarray(0, 2).toString(), 'PK', 'Downloaded Excel must be a genuine XLSX ZIP file.');
+            await evaluate('reportFilterForm.elements.from.value="2026-10-31"; reportFilterForm.elements.to.value="2026-10-01"');
+            assert.equal(await evaluate('validateReportPeriod()'), false);
+            await evaluate('document.querySelector("[data-report-period=year]").click()');
+            assert.equal(await evaluate('reportFilterForm.elements.from.value.endsWith("01-01") && reportFilterForm.elements.to.value.endsWith("12-31")'), true);
+            await evaluate('document.querySelector("[data-report-period=quarter]").click()');
+            assert.equal(await evaluate('validateReportPeriod()'), true);
+            await page('Emulation.setEmulatedMedia', { media: 'print' });
+            assert.equal(await evaluate('[...document.querySelectorAll("[data-report-row]")].every(row=>getComputedStyle(row).display === "table-row")'), true, 'Print must include every page.');
+            await page('Emulation.setEmulatedMedia', { media: '' });
+        }
+        for (const [width, height] of [[1440, 1000], [390, 844], [320, 568], [844, 390]]) {
+            await page('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+            await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+            assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, `Report ${kind} overflow at ${width}.`);
+            assert.equal(await evaluate('[...document.querySelectorAll(".report-money")].every(value => value.scrollWidth <= value.clientWidth)'), true, 'Report totals must fit their cards.');
+            const shot = await page('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+            writeFileSync(join(outputDir, `report-${kind}-${width}x${height}.png`), Buffer.from(shot.data, 'base64'));
+            await evaluate('document.querySelector(".report-details").click()');
+            assert.equal(await evaluate('document.querySelectorAll("#report-movement-rows tr").length'), 2);
+            assert.equal(await evaluate(`(() => {
+                const body=reportDialog.querySelector('.account-dialog-body'), header=reportDialog.querySelector('header'), footer=reportDialog.querySelector('footer');
+                const before=[header.getBoundingClientRect().top,footer.getBoundingClientRect().top]; body.scrollTop=body.scrollHeight;
+                return before[0]===header.getBoundingClientRect().top && before[1]===footer.getBoundingClientRect().top
+                    && reportDialog.scrollWidth<=reportDialog.clientWidth && reportDialog.scrollHeight<=reportDialog.clientHeight+1 && footer.getBoundingClientRect().bottom<=innerHeight;
+            })()`), true, 'Report detail header/footer must remain fixed.');
+            await evaluate('reportDialog.close()');
+        }
+    }
     assert.deepEqual(pageErrors, [], 'Browser errors.');
     assert.deepEqual(failedRequests, [], 'Asset loading errors.');
     assert.equal(postRequests, 0, 'Dashboard sample controls must not submit business data.');
-    console.log(`PASS: dashboard/sidebar, accounts/employees/warehouses, read-only suppliers, audit filters/dates/pagination/diffs, notifications and responsive layout.\nScreenshots: ${outputDir}`);
+    console.log(`PASS: dashboard/sidebar, accounts/employees/warehouses, suppliers, decisions, five reports with XLSX/print, audit filters, notifications and responsive layout.\nScreenshots: ${outputDir}`);
     await send('Browser.close');
 } finally {
     socket?.close();

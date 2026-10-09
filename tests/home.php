@@ -5,20 +5,27 @@ function escapeHtml(string $value): string { return htmlspecialchars($value, ENT
 $user = ['username' => 'preview-admin', 'full_name' => 'Quản trị viên <script>', 'is_super_admin' => 1];
 $_SESSION = ['csrf_token' => str_repeat('a', 64)];
 $preview = 'dashboard';
-foreach (['accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'audit'] as $option) {
+foreach (['accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'reports', 'audit'] as $option) {
     if (in_array('--' . $option, $argv, true)) $preview = $option;
 }
 $sampleRows = ['dashboard' => ['data-receipt ', 5], 'accounts' => ['data-account="', 6],
-    'employees' => ['data-employee="', 12], 'warehouses' => ['data-warehouse="', 12], 'suppliers' => ['data-supplier="', 12], 'decisions' => ['data-decision="', 12], 'audit' => ['data-audit="', 14]];
+    'employees' => ['data-employee="', 12], 'warehouses' => ['data-warehouse="', 12], 'suppliers' => ['data-supplier="', 12], 'decisions' => ['data-decision="', 12], 'reports' => ['data-report-row>', 60], 'audit' => ['data-audit="', 14]];
 $previewOnly = true;
-if ($preview !== 'dashboard') require __DIR__ . '/fixtures/' . $preview . '.php';
+if ($preview === 'reports') {
+    require dirname(__DIR__) . '/app/reports.php';
+    $reportData = require dirname(__DIR__) . '/resources/data/reports-preview.php';
+    $kind = 'inventory';
+    foreach ($argv as $argument) if (str_starts_with($argument, '--report-kind=')) $kind = substr($argument, 14);
+    $filters = reportFilters(['kind' => $kind], $reportData); $report = buildReport($reportData, $filters); $reportError = '';
+    $sampleRows['reports'][1] = $kind === 'inventory' ? 60 : 12;
+} elseif ($preview !== 'dashboard') require __DIR__ . '/fixtures/' . $preview . '.php';
 ob_start();
 require dirname(__DIR__) . '/resources/views/' . ($preview === 'dashboard' ? 'dashboard/home.php' : $preview . '/index.php');
 $html = ob_get_clean();
 if (str_contains($html, 'Quản trị viên <script>') || !str_contains($html, 'Quản trị viên &lt;script&gt;')
     || substr_count($html, $sampleRows[$preview][0]) !== $sampleRows[$preview][1]
     || !str_contains($html, 'name="csrf_token"')
-    || !str_contains($html, $preview === 'dashboard' ? 'Số liệu minh họa' : 'dữ liệu mẫu')) {
+    || !str_contains(mb_strtolower($html), $preview === 'dashboard' ? 'số liệu minh họa' : 'dữ liệu mẫu')) {
     throw new RuntimeException('Dashboard rendering, escaping or sample-data labeling failed.');
 }
 echo in_array('--render', $argv, true) ? $html : 'PASS: ' . $preview . " renders without database, escapes account name, labels sample data and preserves logout CSRF.\n";
