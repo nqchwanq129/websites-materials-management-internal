@@ -8,7 +8,7 @@ require dirname(__DIR__) . '/layouts/dashboard-start.php';
 <?php if ($previewOnly): ?><div class="demo-note"><span class="demo-tag">Bản xem trước</span><span>Tài khoản và quyền bên dưới là dữ liệu mẫu. Các thao tác chưa lưu vào hệ thống.</span></div>
 <?php endif; ?>
 <?php if (!$previewOnly && !in_array('active', $managementData['warehouseStatuses'], true)): ?><p class="account-notice" role="status">Chưa có kho đang hoạt động để cấp quyền mới. Bạn vẫn có thể quản lý tài khoản.</p><?php endif; ?>
-<p id="account-notice" class="account-notice" role="status"<?= empty($managementNotice) ? ' hidden' : '' ?>><?= escapeHtml($managementNotice ?? '') ?></p>
+<p id="account-notice" data-management-flash class="account-notice" role="status"<?= empty($managementNotice) ? ' hidden' : '' ?>><?= escapeHtml($managementNotice ?? '') ?></p>
 <section class="metrics" aria-label="Tổng quan tài khoản">
 <?php foreach ([['users','Tổng tài khoản',count($accounts),'Tài khoản trong hệ thống','purple'],['shield','Đang hoạt động',count(array_filter($accounts, static fn($a) => $a['status'] === 'active')),'Tài khoản đang mở','green'],['shield','Đã khóa',count(array_filter($accounts, static fn($a) => $a['status'] === 'locked')),'Tạm ngừng truy cập','orange'],['warehouse','Kho trong hệ thống',count($warehouses),'Phân quyền riêng theo kho','blue']] as [$glyph,$label,$value,$description,$tone]): ?>
 <article class="metric"><div class="metric-heading"><span><?= $label ?></span><span class="icon-tile <?= $tone ?>"><?= $icon($glyph) ?></span></div><strong class="metric-value"><?= $value ?></strong><p><?= $description ?></p></article>

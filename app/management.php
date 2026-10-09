@@ -7,8 +7,8 @@ function managementText(array $input, string $key, int $max, bool $required = fa
     if (!is_string($value) || !mb_check_encoding($value, 'UTF-8')) throw new DomainException('Thông tin nhập không hợp lệ.');
     $value = trim($value);
     if (($required && $value === '') || mb_strlen($value) > $max || str_contains($value, "\0")) {
-        $label = ['username' => 'tên đăng nhập', 'code' => 'mã nhân viên', 'full_name' => 'họ và tên',
-            'email' => 'email', 'phone' => 'số điện thoại', 'status' => 'trạng thái',
+        $label = ['username' => 'tên đăng nhập', 'code' => 'mã', 'full_name' => 'họ và tên',
+            'email' => 'email', 'phone' => 'số điện thoại', 'name' => 'tên kho', 'address' => 'địa chỉ', 'status' => 'trạng thái',
             'action' => 'thao tác', 'version' => 'phiên bản dữ liệu'][$key] ?? 'thông tin nhập';
         throw new DomainException('Vui lòng kiểm tra ' . $label . ' và độ dài cho phép.');
     }
@@ -26,6 +26,8 @@ function managementSnapshot(PDO $pdo, string $page, string $id): ?array
 {
     if ($page === 'accounts') {
         $statement = $pdo->prepare('SELECT id,username,employee_id,is_super_admin,status,updated_at FROM users WHERE id=?');
+    } elseif ($page === 'warehouses') {
+        $statement = $pdo->prepare('SELECT id,code,name,address,status,updated_at FROM warehouses WHERE id=?');
     } else {
         $statement = $pdo->prepare('SELECT id,code,full_name,email,phone,warehouse_id,status,updated_at FROM employees WHERE id=?');
     }
@@ -44,11 +46,11 @@ function managementSnapshot(PDO $pdo, string $page, string $id): ?array
 
 function saveManagement(PDO $pdo, string $page, string $actorId, array $input): string
 {
-    if (!in_array($page, ['accounts', 'employees'], true)) throw new DomainException('Không được thay đổi nhật ký.');
+    if (!in_array($page, ['accounts', 'employees', 'warehouses'], true)) throw new DomainException('Không được thay đổi nhật ký.');
     $action = managementText($input, 'action', 20, true);
-    if (!in_array($action, ['save', 'state'], true)) throw new DomainException('Thao tác không hợp lệ.');
+    if (!in_array($action, ['save', 'state', 'delete'], true) || ($action === 'delete' && $page === 'accounts')) throw new DomainException('Thao tác không hợp lệ.');
     $id = managementId($input['id'] ?? null, true);
-    if ($action === 'state' && $id === null) throw new DomainException('Thiếu bản ghi cần thay đổi.');
+    if (in_array($action, ['state', 'delete'], true) && $id === null) throw new DomainException('Thiếu bản ghi cần thay đổi.');
     $pdo->beginTransaction();
     try {
         // ponytail: serialize low-volume management writes by locking users; use a dedicated lock row if throughput grows.
@@ -62,7 +64,13 @@ function saveManagement(PDO $pdo, string $page, string $actorId, array $input): 
         }
         $auditAction = $id ? 'update' : 'create';
         $passwordChanged = false;
-        if ($page === 'accounts') {
+        if ($action === 'delete') {
+            $table = $page === 'warehouses' ? 'warehouses' : 'employees';
+            $statement = $pdo->prepare("DELETE FROM $table WHERE id=? AND updated_at=?");
+            $statement->execute([$id, $before['updated_at']]);
+            if ($statement->rowCount() !== 1) throw new DomainException('Thông tin đã thay đổi. Hãy tải lại trang trước khi xóa.');
+            $auditAction = 'delete';
+        } elseif ($page === 'accounts') {
             if ($action === 'state') {
                 $status = managementText($input, 'status', 10, true);
                 if (!in_array($status, ['active', 'locked'], true)) throw new DomainException('Trạng thái tài khoản không hợp lệ.');
@@ -124,6 +132,22 @@ function saveManagement(PDO $pdo, string $page, string $actorId, array $input): 
                 }
                 if ($before && $before['warehouses'] !== $desiredRoles) $auditAction = 'assign_access';
             }
+        } elseif ($page === 'warehouses') {
+            $status = managementText($input, 'status', 10, true);
+            if (!in_array($status, ['active', 'inactive'], true)) throw new DomainException('Trạng thái kho không hợp lệ.');
+            if ($action === 'state') {
+                $pdo->prepare('UPDATE warehouses SET status=? WHERE id=?')->execute([$status, $id]);
+                $auditAction = $status === 'inactive' ? 'deactivate' : 'activate';
+            } else {
+                $code = managementText($input, 'code', 32, true);
+                $name = managementText($input, 'name', 200, true);
+                $address = managementText($input, 'address', 500);
+                if ($id) $pdo->prepare('UPDATE warehouses SET code=?,name=?,address=?,status=? WHERE id=?')->execute([$code, $name, $address ?: null, $status, $id]);
+                else {
+                    $pdo->prepare('INSERT INTO warehouses (code,name,address,status,created_by) VALUES (?,?,?,?,?)')->execute([$code, $name, $address ?: null, $status, $actorId]);
+                    $id = $pdo->lastInsertId();
+                }
+            }
         } else {
             if ($action === 'state') {
                 $status = managementText($input, 'status', 10, true);
@@ -170,16 +194,19 @@ function saveManagement(PDO $pdo, string $page, string $actorId, array $input): 
         if ($passwordChanged) $after['password_changed'] = true;
         $pdo->prepare("INSERT INTO audit_logs (user_id,warehouse_id,action,entity_type,entity_id,before_data,after_data,created_at)
             VALUES (?,?,?,?,?,?,?,UTC_TIMESTAMP(6) + INTERVAL 7 HOUR)")->execute([
-                $actorId, $page === 'employees' ? $after['warehouse_id'] : null, $auditAction,
-                $page === 'accounts' ? 'users' : 'employees', $id,
+                $actorId, $page === 'warehouses' ? ($action === 'delete' ? null : $id) : ($page === 'employees' ? ($after['warehouse_id'] ?? $before['warehouse_id']) : null), $auditAction,
+                $page === 'accounts' ? 'users' : $page, $id,
                 $before === null ? null : json_encode($before, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
-                json_encode($after, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
+                $after === null ? null : json_encode($after, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
             ]);
         $pdo->commit();
-        return $action === 'state' ? 'Đã cập nhật trạng thái.' : 'Đã lưu thông tin và ghi nhật ký thao tác.';
+        return $action === 'delete' ? 'Đã xóa và lưu nhật ký thao tác.' : ($action === 'state' ? 'Đã cập nhật trạng thái.' : 'Đã lưu thông tin và ghi nhật ký thao tác.');
     } catch (Throwable $error) {
         if ($pdo->inTransaction()) $pdo->rollBack();
-        if ($error instanceof PDOException && ($error->errorInfo[1] ?? 0) === 1062) throw new DomainException('Tên đăng nhập hoặc mã nhân viên đã tồn tại.');
+        if ($error instanceof PDOException && ($error->errorInfo[1] ?? 0) === 1451) throw new DomainException($page === 'warehouses'
+            ? 'Không thể xóa kho có nhân viên, quyền truy cập, phiếu, quyết định hoặc nhật ký liên quan. Bạn có thể ngừng hoạt động kho để giữ lịch sử.'
+            : 'Không thể xóa nhân viên đang liên kết tài khoản. Hãy gỡ liên kết ở phần Tài khoản & phân quyền trước, hoặc ngừng hoạt động nhân viên.');
+        if ($error instanceof PDOException && ($error->errorInfo[1] ?? 0) === 1062) throw new DomainException($page === 'warehouses' ? 'Mã kho đã tồn tại. Vui lòng dùng mã khác.' : 'Tên đăng nhập hoặc mã nhân viên đã tồn tại.');
         throw $error;
     }
 }
@@ -215,6 +242,13 @@ function loadManagement(PDO $pdo, string $page): array
                 'email' => $row['email'] ?? '', 'phone' => $row['phone'] ?? '', 'warehouse' => (string) $row['warehouse_id'], 'status' => $row['status'],
                 'account' => implode(', ', $accounts[$row['id']] ?? [])];
         }
+    } elseif ($page === 'warehouses') {
+        $data['warehouseRecords'] = $pdo->query("SELECT w.id,w.code,w.name,w.address,w.status,w.updated_at AS version,
+            (SELECT COUNT(*) FROM employees e WHERE e.warehouse_id=w.id) AS employee_count,
+            (SELECT COUNT(*) FROM employees e WHERE e.warehouse_id=w.id AND e.status='active') AS active_employee_count,
+            (SELECT COUNT(*) FROM user_warehouses uw WHERE uw.warehouse_id=w.id) AS access_count
+            FROM warehouses w ORDER BY w.id DESC")->fetchAll();
+        foreach ($data['warehouseRecords'] as &$row) { $row['id'] = (string) $row['id']; $row['address'] ??= ''; } unset($row);
     } elseif ($page === 'audit') {
         $data['logs'] = [];
         foreach ($pdo->query('SELECT a.*,u.username,e.full_name,w.name AS warehouse_name FROM audit_logs a

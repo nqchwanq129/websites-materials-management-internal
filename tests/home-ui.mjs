@@ -294,6 +294,14 @@ try {
     await evaluate('document.querySelector(".close-employee-dialog").click(); document.querySelector(".employee-state-preview").click()');
     assert.equal(await evaluate('document.getElementById("employee-state-dialog").open'), true);
     await evaluate('document.querySelector("#employee-state-dialog button[value=cancel]").click()');
+    await evaluate('document.querySelector("[data-delete-record]").click()');
+    assert.equal(await evaluate('document.getElementById("management-delete-dialog").open'), true);
+    assert.equal(await evaluate('managementDeleteForm.elements.action.value'), 'delete');
+    assert.equal(await evaluate('document.getElementById("management-delete-description").textContent.includes("NV001")'), true);
+    await evaluate('managementDeleteForm.querySelector("[data-cancel-delete]").click()');
+    assert.equal(await evaluate('document.querySelectorAll("[data-employee]").length'), 12, 'Cancel must leave employee rows intact.');
+    await evaluate('document.querySelector("[data-delete-record]").click(); managementDeleteForm.requestSubmit()');
+    assert.equal(await evaluate('document.getElementById("management-delete-dialog").open'), false);
     for (const [width, height] of [[1440, 1000], [1280, 800], [390, 844], [320, 568], [844, 390]]) {
         await page('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
         await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
@@ -387,10 +395,131 @@ try {
         writeFileSync(join(outputDir, `audit-detail-${width}x${height}.png`), Buffer.from(detail.data, 'base64'));
         await evaluate('document.querySelector("#audit-dialog footer button").click()');
     }
+    const warehouseRender = spawnSync(php, ['tests/home.php', '--warehouses', '--render'], { encoding: 'utf8', windowsHide: true });
+    assert.equal(warehouseRender.status, 0, warehouseRender.stderr);
+    await page('Page.navigate', { url: process.env.LOGIN_URL || 'http://localhost/qlvt-remake/public/' });
+    for (let i = 0; i < 100; i++) {
+        if (await evaluate('document.readyState === "complete" && Boolean(document.getElementById("login-form"))')) break;
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    const warehouseFrame = await page('Page.getFrameTree');
+    await page('Page.setDocumentContent', { frameId: warehouseFrame.frameTree.frame.id, html: warehouseRender.stdout });
+    for (let i = 0; i < 100; i++) {
+        if (await evaluate('document.readyState === "complete" && typeof filterWarehouses === "function"')) break;
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    assert.equal(await evaluate('document.querySelectorAll("[data-warehouse]:not([hidden])").length'), 10);
+    assert.equal(await evaluate('document.querySelector("a[href=\\"index.php?page=warehouses\\"]").getAttribute("aria-current")'), 'page');
+    await evaluate('document.getElementById("warehouse-page-next").click()');
+    assert.equal(await evaluate('document.querySelectorAll("[data-warehouse]:not([hidden])").length'), 2);
+    await evaluate('warehouseStatus.value="inactive"; warehouseStatus.dispatchEvent(new Event("change"))');
+    assert.equal(await evaluate('document.querySelectorAll("[data-warehouse]:not([hidden])").length'), 2);
+    assert.equal(await evaluate('document.getElementById("warehouse-page-label").textContent'), '1 / 1');
+    await evaluate('warehouseStatus.value=""; warehouseSearch.value="nguyen trai"; filterWarehouses()');
+    assert.equal(await evaluate('document.getElementById("warehouse-count").textContent.endsWith("/ 12 kho")'), true, 'Search ignores Vietnamese accents.');
+    await evaluate('warehouseSearch.value="missing-warehouse"; filterWarehouses()');
+    assert.equal(await evaluate('document.querySelector(".warehouse-empty").hidden'), false);
+    assert.equal(await evaluate('previousWarehousePage.disabled && nextWarehousePage.disabled'), true);
+    await evaluate('warehouseSearch.value=""; filterWarehouses(); document.getElementById("create-warehouse").click()');
+    assert.equal(await evaluate('warehouseForm.checkValidity()'), false, 'Warehouse code and name are required.');
+    await evaluate('warehouseForm.elements.code.value="KHO13"; warehouseForm.elements.namedItem("name").value="Kho mới"; warehouseForm.requestSubmit()');
+    assert.equal(await evaluate('warehouseDialog.open'), false);
+    assert.equal(await evaluate('document.getElementById("warehouse-notice").hidden'), false);
+    assert.deepEqual(await evaluate(`(async () => {
+        const originalFetch = window.fetch;
+        const originalPreview = warehouseForm.dataset.preview;
+        const requests = [];
+        const results = [];
+        const error = warehouseForm.querySelector('[data-form-error]');
+        try {
+            warehouseForm.dataset.preview = 'false';
+            window.fetch = async (endpoint, options) => {
+                requests.push({ endpoint, action: options.body.get('action'), method: options.method });
+                return new Response(JSON.stringify({ ok: false, message: 'Phiên đăng nhập đã hết hạn.' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+            };
+            await submitManagementForm(warehouseForm, warehouseDialog, 'warehouse-notice');
+            results.push(error.textContent === 'Phiên đăng nhập đã hết hạn.' && !error.hidden);
+            window.fetch = async () => new Response('Not Found', { status: 404, headers: { 'Content-Type': 'text/html' } });
+            await submitManagementForm(warehouseForm, warehouseDialog, 'warehouse-notice');
+            results.push(error.textContent === 'Không thể lưu dữ liệu. Máy chủ trả về phản hồi không hợp lệ.' && !error.hidden);
+            return { correctEndpoint: requests[0].endpoint === new URL('index.php?page=warehouses', document.baseURI).href,
+                correctAction: requests[0].action === 'save', correctMethod: requests[0].method === 'POST',
+                errors: results, enabled: !warehouseForm.querySelector('button[type=submit]').disabled };
+        } finally { window.fetch = originalFetch; warehouseForm.dataset.preview = originalPreview; }
+    })()`), { correctEndpoint: true, correctAction: true, correctMethod: true, errors: [true, true], enabled: true }, 'Hidden action fields must not shadow the submission URL; non-JSON errors must not claim session expiry.');
+    await evaluate('document.querySelector(".edit-warehouse").click()');
+    assert.equal(await evaluate('warehouseForm.elements.namedItem("name").value'), 'Kho 1');
+    assert.equal(await evaluate('warehouseForm.elements.id.value'), '1');
+    assert.deepEqual(await evaluate(`(async () => {
+        const originalFetch = window.fetch;
+        const originalPreview = warehouseForm.dataset.preview;
+        try {
+            warehouseForm.dataset.preview = 'false';
+            window.fetch = async () => new Response(JSON.stringify({ ok: false, message: 'Mã kho <img src=x onerror=alert(1)> đã tồn tại.' }), { status: 422, headers: { 'Content-Type': 'application/json' } });
+            await submitManagementForm(warehouseForm, warehouseDialog, 'warehouse-notice');
+            const center = document.getElementById('notification-center');
+            const toast = center.querySelector('.sn-notify');
+            return { warning: toast.classList.contains('sn-notify-warning'),
+                topLayer: center.matches(':popover-open') && center.parentElement === warehouseDialog,
+                dialogOpen: warehouseDialog.open, escaped: !toast.querySelector('img') && toast.textContent.includes('<img'),
+                accessible: toast.getAttribute('role') === 'alert' && toast.querySelector('.sn-notify-close').tabIndex === 0,
+                retained: warehouseForm.elements.namedItem('name').value === 'Kho 1' };
+        } finally { window.fetch = originalFetch; warehouseForm.dataset.preview = originalPreview; }
+    })()`), { warning: true, topLayer: true, dialogOpen: true, escaped: true, accessible: true, retained: true }, 'Validation toast must display above the open dialog, escape content and preserve the form.');
+    await evaluate('document.querySelector("#notification-center .sn-notify-close").dispatchEvent(new KeyboardEvent("keydown", { key:"Enter", bubbles:true }))');
+    await new Promise(resolve => setTimeout(resolve, 250));
+    assert.equal(await evaluate('document.querySelectorAll("#notification-center .sn-notify").length'), 0, 'Keyboard closes notification.');
+    await evaluate('warehouseForm.elements.status.value="inactive"; updateWarehouseStatusNote()');
+    assert.equal(await evaluate('document.getElementById("warehouse-inactive-note").hidden'), false);
+    await evaluate('warehouseDialog.close()');
+    for (const [width, height] of [[1440, 1000], [1280, 800], [390, 844], [320, 568], [844, 390]]) {
+        await page('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+        await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+        assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, `Warehouse page overflow at ${width}px.`);
+        const shot = await page('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+        writeFileSync(join(outputDir, `warehouses-${width}x${height}.png`), Buffer.from(shot.data, 'base64'));
+        for (const selector of ['.edit-warehouse', '.warehouse-state', '[data-delete-record]']) {
+            await evaluate(`document.querySelector('${selector}').click()`);
+            assert.deepEqual(await evaluate(`(() => {
+                const dialog = document.querySelector('dialog[open]');
+                const body = dialog.querySelector('.account-dialog-body');
+                const heading = dialog.querySelector('.account-dialog-heading');
+                const footer = dialog.querySelector('.account-dialog-footer');
+                const before = [heading.getBoundingClientRect().top, footer.getBoundingClientRect().top];
+                body.scrollTop = body.scrollHeight;
+                return { fixed: before[0] === heading.getBoundingClientRect().top && before[1] === footer.getBoundingClientRect().top,
+                    fits: dialog.scrollHeight <= dialog.clientHeight + 1 && dialog.scrollWidth <= dialog.clientWidth,
+                    actionsVisible: [...footer.querySelectorAll('button'), heading.querySelector('button')].every(button => { const rect = button.getBoundingClientRect(); return rect.top >= 0 && rect.bottom <= innerHeight; }) };
+            })()`), { fixed: true, fits: true, actionsVisible: true }, `Warehouse dialog must keep its title/actions fixed at ${width}x${height}.`);
+            await evaluate('document.querySelector("dialog[open] .account-dialog-body").scrollTop=0');
+            const detail = await page('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+            writeFileSync(join(outputDir, `warehouse-${selector.slice(1)}-${width}x${height}.png`), Buffer.from(detail.data, 'base64'));
+            await evaluate('document.querySelector("dialog[open]").close()');
+        }
+    }
+    await evaluate('document.querySelector("[data-delete-record]").click()');
+    assert.equal(await evaluate('managementDeleteForm.elements.id.value'), '1', 'Delete the selected warehouse.');
+    assert.equal(await evaluate('managementDeleteForm.elements.version.value'), '2026-10-09 12:00:00.000000');
+    await evaluate('managementDeleteForm.querySelector("[data-cancel-delete]").click()');
+    assert.equal(await evaluate('document.querySelectorAll("[data-warehouse]").length'), 12, 'Cancel must leave warehouse rows intact.');
+    await evaluate('document.querySelector("[data-delete-record]").click(); managementDeleteForm.requestSubmit()');
+    assert.equal(await evaluate('document.getElementById("management-delete-dialog").open'), false);
+    await evaluate('showNotification("Đã lưu thông tin kho.", "success")');
+    await new Promise(resolve => setTimeout(resolve, 250));
+    assert.equal(await evaluate('document.querySelector("#notification-center .sn-notify-success").getAttribute("role")'), 'status');
+    for (const width of [1440, 390, 320]) {
+        await page('Emulation.setDeviceMetricsOverride', { width, height: 844, deviceScaleFactor: 1, mobile: false });
+        await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+        assert.equal(await evaluate(`(() => { const rect=document.querySelector('#notification-center .sn-notify').getBoundingClientRect(); return rect.left>=0 && rect.right<=innerWidth && document.documentElement.scrollWidth<=innerWidth; })()`), true, 'Notification must fit desktop and mobile.');
+        const toastShot = await page('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+        writeFileSync(join(outputDir, `notification-${width}.png`), Buffer.from(toastShot.data, 'base64'));
+    }
+    await new Promise(resolve => setTimeout(resolve, 5000));
+    assert.equal(await evaluate('document.querySelectorAll("#notification-center .sn-notify").length'), 0, 'Success notification closes automatically.');
     assert.deepEqual(pageErrors, [], 'Browser errors.');
     assert.deepEqual(failedRequests, [], 'Asset loading errors.');
     assert.equal(postRequests, 0, 'Dashboard sample controls must not submit business data.');
-    console.log(`PASS: dashboard/sidebar, accounts/employees, audit filters/dates/pagination/diffs, preview-only actions and responsive layout.\nScreenshots: ${outputDir}`);
+    console.log(`PASS: dashboard/sidebar, accounts/employees/warehouses, audit filters/dates/pagination/diffs, preview-only actions and responsive layout.\nScreenshots: ${outputDir}`);
     await send('Browser.close');
 } finally {
     socket?.close();

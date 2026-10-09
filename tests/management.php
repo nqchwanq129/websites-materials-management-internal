@@ -148,6 +148,74 @@ try {
         verify(httpManagement('accounts', ['csrf_token' => $csrf, 'action' => 'state', 'id' => $targetId, 'version' => $current['updated_at'], 'status' => $status])[0] === 200, 'Account state change failed.');
         verify(findUser($pdo, 'id', $targetId)['status'] === $status, 'Account state not persisted.');
     }
+    $warehouseInput = ['csrf_token' => $csrf, 'action' => 'save', 'code' => $prefix . '-new', 'name' => 'Kho thử <script>', 'address' => 'Địa chỉ thử', 'status' => 'active'];
+    verify(httpManagement('warehouses', $warehouseInput)[0] === 200, 'Warehouse creation failed.');
+    $warehouse = $pdo->query('SELECT id FROM warehouses ORDER BY id DESC LIMIT 1')->fetchColumn();
+    $warehouse = managementSnapshot($pdo, 'warehouses', (string) $warehouse);
+    verify($warehouse['name'] === $warehouseInput['name'], 'Warehouse was not persisted.');
+    verify(httpManagement('warehouses', $warehouseInput)[0] === 422, 'Duplicate warehouse code accepted.');
+    $withoutCsrf = $warehouseInput; unset($withoutCsrf['csrf_token']);
+    verify(httpManagement('warehouses', $withoutCsrf)[0] === 403, 'Warehouse CSRF bypass.');
+    rejected(fn() => saveManagement($pdo, 'warehouses', $targetId, $warehouseInput));
+    $warehouseUpdate = $warehouseInput + ['id' => (string) $warehouse['id'], 'version' => $warehouse['updated_at']];
+    $warehouseUpdate['address'] = 'Địa chỉ mới';
+    verify(httpManagement('warehouses', $warehouseUpdate)[0] === 200, 'Warehouse edit failed.');
+    verify(managementSnapshot($pdo, 'warehouses', (string) $warehouse['id'])['address'] === 'Địa chỉ mới', 'Warehouse edit not persisted.');
+    verify(httpManagement('warehouses', $warehouseUpdate)[0] === 422, 'Stale warehouse edit accepted.');
+    [, $body] = httpManagement('warehouses');
+    verify(str_contains($body, 'Kho thử &lt;script&gt;') && !str_contains($body, 'Kho thử <script>'), 'Warehouse HTML must escape persisted names.');
+    $records = loadManagement($pdo, 'warehouses')['warehouseRecords'];
+    $firstWarehouse = array_values(array_filter($records, fn($w) => $w['id'] === $warehouseIds[0]))[0];
+    verify((int) $firstWarehouse['employee_count'] === 1 && (int) $firstWarehouse['active_employee_count'] === 0 && (int) $firstWarehouse['access_count'] === 1, 'Warehouse relationship counts incorrect.');
+    $employee = managementSnapshot($pdo, 'employees', $employeeId);
+    saveManagement($pdo, 'employees', $actorId, ['action' => 'state', 'id' => $employeeId, 'version' => $employee['updated_at'], 'status' => 'active']);
+    verify(warehousePermission($pdo, $targetId, $warehouseIds[0]) === 'viewer', 'Active warehouse permission missing.');
+    foreach (['inactive', 'active'] as $status) {
+        $currentWarehouse = managementSnapshot($pdo, 'warehouses', $warehouseIds[0]);
+        verify(httpManagement('warehouses', ['csrf_token' => $csrf, 'action' => 'state', 'id' => $warehouseIds[0], 'version' => $currentWarehouse['updated_at'], 'status' => $status])[0] === 200, 'Warehouse state change failed.');
+        verify(warehousePermission($pdo, $targetId, $warehouseIds[0]) === ($status === 'active' ? 'viewer' : null), 'Warehouse state must revoke/restore access.');
+        if ($status === 'inactive') {
+            $blockedEmployee = $employeeInput; $blockedEmployee['code'] = $prefix . '-blocked';
+            verify(httpManagement('employees', $blockedEmployee)[0] === 422, 'New employee assigned to inactive warehouse.');
+            $blockedAccount = $accountInput; $blockedAccount['username'] = $prefix . '-blocked';
+            verify(httpManagement('accounts', $blockedAccount)[0] === 422, 'New account granted inactive warehouse access.');
+        }
+    }
+    $stmt = $pdo->prepare("SELECT action,warehouse_id,after_data FROM audit_logs WHERE entity_type='warehouses' ORDER BY id");
+    $stmt->execute(); $warehouseLogs = $stmt->fetchAll();
+    verify(array_column($warehouseLogs, 'action') === ['create', 'update', 'deactivate', 'activate'], 'Warehouse changes must be audited once each.');
+    [, $body] = httpManagement('audit');
+    verify(str_contains($body, 'Kho hàng') && str_contains($body, $warehouseInput['code']), 'Warehouse audit history missing from UI.');
+    $employee = managementSnapshot($pdo, 'employees', $employeeId);
+    $deleteInput = ['csrf_token' => $csrf, 'action' => 'delete', 'id' => $employeeId, 'version' => $employee['updated_at']];
+    verify(httpManagement('employees', $deleteInput)[0] === 422, 'Linked employee must not be deleted.');
+    verify(managementSnapshot($pdo, 'employees', $employeeId) === $employee, 'Blocked deletion modified an employee.');
+    $currentWarehouse = managementSnapshot($pdo, 'warehouses', $warehouseIds[0]);
+    verify(httpManagement('warehouses', ['csrf_token' => $csrf, 'action' => 'delete', 'id' => $warehouseIds[0], 'version' => $currentWarehouse['updated_at']])[0] === 422, 'Referenced warehouse must not be deleted.');
+    $deleteEmployeeInput = $employeeInput; $deleteEmployeeInput['code'] = $prefix . '-delete';
+    verify(httpManagement('employees', $deleteEmployeeInput)[0] === 200, 'Delete-test employee creation failed.');
+    $stmt = $pdo->prepare('SELECT id FROM employees WHERE code=?'); $stmt->execute([$deleteEmployeeInput['code']]); $deleteEmployeeId = (string) $stmt->fetchColumn();
+    $deleteEmployee = managementSnapshot($pdo, 'employees', $deleteEmployeeId);
+    $deleteInput['id'] = $deleteEmployeeId; $deleteInput['version'] = $deleteEmployee['updated_at'];
+    $badDelete = $deleteInput; $badDelete['csrf_token'] = 'bad';
+    verify(httpManagement('employees', $badDelete)[0] === 403, 'Employee deletion bypassed CSRF.');
+    rejected(fn() => saveManagement($pdo, 'employees', $targetId, $deleteInput));
+    verify(httpManagement('employees', $deleteInput)[0] === 200 && managementSnapshot($pdo, 'employees', $deleteEmployeeId) === null, 'Unlinked employee deletion failed.');
+    $pdo->prepare('INSERT INTO warehouses (code,name,created_by) VALUES (?,?,?)')->execute([$prefix . '-delete', 'Unreferenced warehouse', $actorId]);
+    $deleteWarehouseId = $pdo->lastInsertId();
+    $deleteWarehouse = managementSnapshot($pdo, 'warehouses', $deleteWarehouseId);
+    $pdo->prepare("UPDATE warehouses SET name='Changed',updated_at=updated_at + INTERVAL 1 SECOND WHERE id=?")->execute([$deleteWarehouseId]);
+    $deleteInput = ['csrf_token' => $csrf, 'action' => 'delete', 'id' => $deleteWarehouseId, 'version' => $deleteWarehouse['updated_at']];
+    verify(httpManagement('warehouses', $deleteInput)[0] === 422, 'Stale warehouse deletion accepted.');
+    $deleteInput['version'] = managementSnapshot($pdo, 'warehouses', $deleteWarehouseId)['updated_at'];
+    verify(httpManagement('warehouses', $deleteInput)[0] === 200 && managementSnapshot($pdo, 'warehouses', $deleteWarehouseId) === null, 'Unreferenced warehouse deletion failed.');
+    $deletes = $pdo->query("SELECT * FROM audit_logs WHERE action='delete' ORDER BY id")->fetchAll();
+    verify(count($deletes) === 2 && array_column($deletes, 'entity_type') === ['employees', 'warehouses'], 'Successful deletions must be audited once each.');
+    foreach ($deletes as $log) verify($log['before_data'] !== null && $log['after_data'] === null, 'Deletion audit must retain the removed snapshot.');
+    verify($deletes[1]['warehouse_id'] === null, 'Deleted warehouse audit must not reference a missing row.');
+    $pdo->prepare('INSERT INTO employees (code,full_name,warehouse_id,created_by) VALUES (?,?,?,?)')->execute([$prefix . '-rollback', 'Rollback deletion', $warehouseIds[0], $actorId]);
+    $rollbackEmployeeId = $pdo->lastInsertId();
+    $rollbackEmployee = managementSnapshot($pdo, 'employees', $rollbackEmployeeId);
     try { $pdo->exec('DELETE FROM audit_logs'); throw new RuntimeException('Immutable audit trigger missing.'); }
     catch (PDOException $error) { verify($error->getCode() === '45000', 'Unexpected audit trigger error.'); }
     $pdo->exec("CREATE TRIGGER test_audit_failure BEFORE INSERT ON audit_logs FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Test audit failure'");
@@ -157,6 +225,14 @@ try {
         throw new RuntimeException('Write committed without its audit record.');
     } catch (PDOException $error) { verify($error->getCode() === '45000', 'Unexpected audit insertion error.'); }
     verify(managementSnapshot($pdo, 'accounts', $targetId) === $current, 'Audit insertion failure must roll back the data write.');
+    $currentWarehouse = managementSnapshot($pdo, 'warehouses', $warehouseIds[0]);
+    try {
+        saveManagement($pdo, 'warehouses', $actorId, ['action' => 'state', 'id' => $warehouseIds[0], 'version' => $currentWarehouse['updated_at'], 'status' => 'inactive']);
+        throw new RuntimeException('Warehouse change committed without audit.');
+    } catch (PDOException $error) { verify($error->getCode() === '45000', 'Unexpected warehouse audit failure.'); }
+    verify(managementSnapshot($pdo, 'warehouses', $warehouseIds[0]) === $currentWarehouse, 'Warehouse write must roll back when audit fails.');
+    verify(httpManagement('employees', ['csrf_token' => $csrf, 'action' => 'delete', 'id' => $rollbackEmployeeId, 'version' => $rollbackEmployee['updated_at']])[0] === 503, 'Deletion must fail when audit insert fails.');
+    verify(managementSnapshot($pdo, 'employees', $rollbackEmployeeId) === $rollbackEmployee, 'Audit failure must restore the deleted employee.');
     echo "PASS: real HTTP saves, CSRF, validation, hashing, employee linking, warehouse grants/revocation, stale writes, rollback, self-lock protection and atomic audit history.\n";
 } finally {
     if (is_resource($server)) { proc_terminate($server); proc_close($server); }

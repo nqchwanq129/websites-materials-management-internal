@@ -1,0 +1,9 @@
+#notification-center{margin:0;border:0;background:transparent;box-sizing:border-box;overflow:hidden;color:#39304f;grid-template-columns:minmax(0,min(370px,100%));justify-content:end;--sn-notify-width:100%;--sn-notify-radius:12px;--sn-notify-padding:16px;--sn-notify-icon-size:28px;--sn-notify-close-icon-size:18px;--sn-notify-progress-height:3px;--sn-success-color:#65509b;--sn-success-progress-color:#b7a4dd;--sn-info-color:#65509b;--sn-info-progress-color:#b7a4dd;--sn-warning-color:#dc873c;--sn-warning-progress-color:#efbc91;--sn-error-color:#b74b3f;--sn-error-progress-color:#e6a89f}
+#notification-center .vishipel-notify{max-width:100%;border-color:#e4ddec;border-left:4px solid var(--sn-notify-icon-color);box-shadow:0 8px 30px #29235c1c;align-items:flex-start;font-family:inherit}
+#notification-center .sn-notify-content{min-width:0;overflow-wrap:anywhere}
+#notification-center .sn-notify-title{color:#39304f;font-size:13px;line-height:1.5;padding-right:24px}
+#notification-center .sn-notify-text{color:#756880;font-size:12px;line-height:1.7;padding-right:12px}
+#notification-center .sn-notify-close{top:12px;right:12px;border-radius:4px}
+#notification-center .sn-notify-close:focus-visible{outline:2px solid #65509b;outline-offset:3px}
+#notification-center .sn-notify-icon{margin-top:2px}
+@media(prefers-reduced-motion:reduce){#notification-center .sn-notify{transition:none}#notification-center .sn-notify:before{animation:none}}

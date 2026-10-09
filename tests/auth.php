@@ -78,6 +78,7 @@ try {
     check(request('index.php?page=home')[0] === 303, 'Guests must not access the protected page.');
     check(request('index.php?page=accounts')[0] === 303, 'Guests must not access account management.');
     check(request('index.php?page=employees')[0] === 303, 'Guests must not access employee management.');
+    check(request('index.php?page=warehouses')[0] === 303, 'Guests must not access warehouse management.');
     check(request('index.php?page=audit')[0] === 303, 'Guests must not access audit logs.');
     check(request('index.php', ['username' => $username, 'password' => $password])[0] === 303, 'Missing CSRF token should redirect to login.');
     [$status, $body] = request('index.php?page=home');
@@ -89,6 +90,7 @@ try {
     $logoutToken = csrf($body);
     check(request('index.php?page=accounts')[0] === 200, 'Super admin should access account UI.');
     check(request('index.php?page=employees')[0] === 200, 'Super admin should access employee UI.');
+    check(request('index.php?page=warehouses')[0] === 200, 'Super admin should access warehouse UI.');
     check(request('index.php?page=audit')[0] === 200, 'Super admin should access audit UI.');
     check(request('index.php?page=accounts', ['csrf_token' => $logoutToken])[0] === 422, 'Invalid account writes must be rejected.');
     check(request('index.php?page=employees', ['csrf_token' => $logoutToken])[0] === 422, 'Invalid employee writes must be rejected.');
@@ -96,6 +98,8 @@ try {
     $pdo->prepare('UPDATE users SET is_super_admin=0 WHERE id=?')->execute([$userId]);
     check(request('index.php?page=accounts')[0] === 403, 'Non-admin users must not access account management.');
     check(request('index.php?page=employees')[0] === 403, 'Non-admin users must not access employee management.');
+    check(request('index.php?page=warehouses')[0] === 403, 'Non-admin users must not access warehouse management.');
+    check(request('index.php?page=warehouses', ['csrf_token' => $logoutToken, 'action' => 'save'])[0] === 403, 'Non-admin users must not change warehouses.');
     check(request('index.php?page=audit')[0] === 403, 'Non-admin users must not access audit logs.');
     $pdo->prepare('UPDATE users SET is_super_admin=1 WHERE id=?')->execute([$userId]);
     check(request('index.php?page=logout')[0] === 403, 'GET must not log out.');

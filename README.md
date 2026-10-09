@@ -114,7 +114,34 @@ configuration or production records are changed by this check.
 UI fixtures live only in `tests/fixtures/`; production management pages never
 fall back to sample data. The home dashboard remains a UI preview.
 
+Super admins can open **Kho hàng → Danh sách kho** at
+`public/index.php?page=warehouses`. The page reads real warehouse codes, names,
+addresses and active/inactive statuses, with employee and individual access counts.
+Search, status filters and pagination show 10 warehouses per page. Create/edit and
+activate/deactivate actions validate unique codes, reject stale edits and record
+before/after audit history in the same transaction. Inactive warehouses deny access
+and cannot receive new employee assignments or new grants; existing history and
+grants are preserved for reactivation. Stock reporting remains a future function.
+Run `php tests/home.php --warehouses` for fixture rendering and
+`php tests/management.php` for isolated database checks; the browser check includes
+warehouse forms, filters, pagination and fixed dialog headers/footers.
+
+Warehouse and employee rows also offer **Xóa** with an explicit confirmation.
+Only super admins can delete; CSRF and version checks still apply. Foreign keys
+block deleting linked employees or warehouses referenced by employees, access
+grants, receipts, decisions or audit history. Warehouses created through the app
+already have audit history and should normally be deactivated instead of deleted.
+Successful deletions retain their before snapshot in the immutable audit log;
+if audit insertion fails, the deletion rolls back. Tests use the isolated DB.
+
 Form dialogs keep the title/description and bottom Cancel/Save actions fixed.
+Dashboard notifications use Simple Notify 1.0.6 (MIT), vendored under
+`public/assets/vendor/simple-notify/`; no CDN is needed at runtime. Successful
+management writes display a toast after the existing redirect. Validation warnings
+and save errors remain visible in the form and also display above its dialog.
+Success/info messages close after 4.5 seconds; errors/warnings require dismissal.
+Notification content is escaped, close controls support keyboard access and motion
+respects the user's reduced-motion preference. The design uses the VISHIPEL palette.
 Only the main form body scrolls. Use this same layout for future create/edit
 dialogs, including on short screens and mobile landscape.
 

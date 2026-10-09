@@ -1,0 +1,8 @@
+<?php $deleteLabel = $activePage === 'warehouses' ? 'kho' : 'nhân viên'; ?>
+<dialog id="management-delete-dialog" class="account-dialog" aria-labelledby="management-delete-title">
+<form id="management-delete-form" action="index.php?page=<?= $activePage ?>" method="post" data-preview="<?= $previewOnly ? 'true' : 'false' ?>">
+    <input type="hidden" name="csrf_token" value="<?= escapeHtml($_SESSION['csrf_token']) ?>"><input type="hidden" name="action" value="delete"><input type="hidden" name="id"><input type="hidden" name="version">
+    <header class="account-dialog-heading"><div><span class="eyebrow">XÁC NHẬN XÓA</span><h2 id="management-delete-title">Xóa <?= $deleteLabel ?></h2><p id="management-delete-description"></p></div><button class="icon-button" type="button" data-cancel-delete aria-label="Đóng"><?= $icon('close') ?></button></header>
+    <div class="account-dialog-body"><p class="form-error" data-form-error role="alert" hidden></p><p>Bạn có chắc muốn xóa <?= $deleteLabel ?> này? Bản ghi sẽ được xóa khỏi danh sách và không thể khôi phục bằng thao tác trên giao diện. Nhật ký thay đổi vẫn được giữ lại.</p><p class="employee-inactive-note"><?= $activePage === 'warehouses' ? 'Kho có nhân viên, quyền truy cập, phiếu, quyết định hoặc nhật ký liên quan sẽ không được xóa. Bạn có thể chọn Ngừng hoạt động để giữ lịch sử.' : 'Nhân viên đang liên kết tài khoản sẽ không được xóa. Bạn có thể gỡ liên kết ở mục Tài khoản & phân quyền trước, hoặc chọn Ngừng hoạt động.' ?></p></div>
+    <footer class="account-dialog-footer"><button class="button" type="button" data-cancel-delete>Hủy</button><button class="button button-danger" type="submit">Xóa <?= $deleteLabel ?></button></footer>
+</form></dialog>

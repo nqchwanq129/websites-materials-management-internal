@@ -88,6 +88,36 @@ if (search && warehouse) {
     warehouse.addEventListener('change', filterReceipts);
 }
 
+function showNotification(message, status = 'success') {
+    if (typeof Notify !== 'function') return false;
+    const center = document.getElementById('notification-center');
+    if (center.matches(':popover-open')) center.hidePopover();
+    (document.querySelector('dialog[open]') || document.body).appendChild(center);
+    center.replaceChildren();
+    const text = document.createElement('span');
+    text.textContent = message;
+    const notification = new Notify({ status, title: { success: 'Thành công', error: 'Không thể hoàn tất', warning: 'Cần kiểm tra', info: 'Thông báo' }[status],
+        text: text.innerHTML, customClass: 'vishipel-notify', type: 'outline', effect: 'fade',
+        speed: matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 180,
+        position: 'right top', notificationsPadding: 16, notificationsGap: 10,
+        autoclose: status === 'success' || status === 'info', autotimeout: 4500 });
+    notification.wrapper.setAttribute('role', status === 'error' || status === 'warning' ? 'alert' : 'status');
+    const close = notification.wrapper.querySelector('.sn-notify-close');
+    close.setAttribute('role', 'button');
+    close.setAttribute('aria-label', 'Đóng thông báo');
+    close.tabIndex = 0;
+    close.addEventListener('keydown', event => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        notification.close();
+    });
+    center.showPopover();
+    return true;
+}
+document.querySelectorAll('[data-management-flash]').forEach(notice => {
+    if (!notice.hidden && notice.textContent.trim() && showNotification(notice.textContent.trim())) notice.hidden = true;
+});
+
 async function submitManagementForm(form, dialog, noticeId) {
     const error = form.querySelector('[data-form-error]');
     if (form.dataset.preview === 'true') {
@@ -97,24 +127,48 @@ async function submitManagementForm(form, dialog, noticeId) {
         notice.textContent = 'Bản xem trước: chưa có dữ liệu nào được lưu hoặc thay đổi.';
         notice.hidden = false;
         dialog.close();
+        showNotification(notice.textContent, 'info');
         return;
     }
     const payload = new FormData(form);
+    const endpoint = new URL(form.getAttribute('action'), document.baseURI).href;
     const buttons = [...form.querySelectorAll('button')].filter(button => button.type === 'submit');
     buttons.forEach(button => { button.disabled = true; });
     error.hidden = true;
+    let failureStatus = 'error';
     try {
-        const response = await fetch(form.action, { method: 'POST', body: payload, headers: { Accept: 'application/json' }, credentials: 'same-origin' });
-        if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('Phiên đăng nhập đã kết thúc. Hãy tải lại trang.');
+        const response = await fetch(endpoint, { method: 'POST', body: payload, headers: { Accept: 'application/json' }, credentials: 'same-origin' });
+        if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('Không thể lưu dữ liệu. Máy chủ trả về phản hồi không hợp lệ.');
         const result = await response.json();
-        if (!response.ok || !result.ok) throw new Error(result.message || 'Không thể lưu dữ liệu.');
-        window.location.assign(form.action);
+        if (!response.ok || !result.ok) {
+            if (response.status === 422) failureStatus = 'warning';
+            throw new Error(result.message || 'Không thể lưu dữ liệu.');
+        }
+        window.location.assign(endpoint);
     } catch (failure) {
         error.textContent = failure.message || 'Không thể kết nối. Vui lòng thử lại.';
         error.hidden = false;
+        showNotification(error.textContent, failureStatus);
     } finally {
         const password = form.querySelector('input[type=password]');
         if (password) password.value = '';
         buttons.forEach(button => { button.disabled = false; });
     }
+}
+
+const managementDeleteForm = document.getElementById('management-delete-form');
+if (managementDeleteForm) {
+    const deleteDialog = document.getElementById('management-delete-dialog');
+    const noticeId = document.getElementById('employee-notice') ? 'employee-notice' : 'warehouse-notice';
+    document.querySelectorAll('[data-delete-record]').forEach(button => button.addEventListener('click', () => {
+        const row = button.closest('[data-employee], [data-warehouse]');
+        const record = JSON.parse(row.dataset.employee || row.dataset.warehouse);
+        managementDeleteForm.elements.id.value = record.id;
+        managementDeleteForm.elements.version.value = record.version || '';
+        managementDeleteForm.querySelector('[data-form-error]').hidden = true;
+        document.getElementById('management-delete-description').textContent = `${record.full_name || record.name} (${record.code})`;
+        deleteDialog.showModal();
+    }));
+    managementDeleteForm.querySelectorAll('[data-cancel-delete]').forEach(button => button.addEventListener('click', () => deleteDialog.close()));
+    managementDeleteForm.addEventListener('submit', event => { event.preventDefault(); submitManagementForm(managementDeleteForm, deleteDialog, noticeId); });
 }
