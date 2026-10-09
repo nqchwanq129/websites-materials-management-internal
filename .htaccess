@@ -1,0 +1,7 @@
+Options -Indexes
+RewriteEngine On
+RewriteRule ^(?!public(?:/|$)).+ - [F,L]
+
+<FilesMatch "^\.">
+    Require all denied
+</FilesMatch>

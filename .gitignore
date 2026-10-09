@@ -8,6 +8,7 @@
 
 # Dependencies and generated files.
 /vendor/
+/storage/login-attempts/
 /storage/uploads/*
 !/storage/uploads/.gitkeep
 *.log
