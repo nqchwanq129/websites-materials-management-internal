@@ -10,6 +10,8 @@ foreach (['accounts', 'employees', 'audit'] as $option) {
 }
 $sampleRows = ['dashboard' => ['data-receipt ', 5], 'accounts' => ['data-account="', 6],
     'employees' => ['data-employee="', 12], 'audit' => ['data-audit="', 14]];
+$previewOnly = true;
+if ($preview !== 'dashboard') require __DIR__ . '/fixtures/' . $preview . '.php';
 ob_start();
 require dirname(__DIR__) . '/resources/views/' . ($preview === 'dashboard' ? 'dashboard/home.php' : $preview . '/index.php');
 $html = ob_get_clean();

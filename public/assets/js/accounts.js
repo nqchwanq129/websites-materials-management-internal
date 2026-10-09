@@ -26,8 +26,8 @@ function filterAccounts(resetPage = true) {
     const start = (accountPage - 1) * accountPageSize;
     matches.slice(start, start + accountPageSize).forEach(row => { row.hidden = false; });
     document.getElementById('account-count').textContent = matches.length
-        ? `Hiển thị ${start + 1}–${Math.min(start + accountPageSize, matches.length)} / ${matches.length} tài khoản mẫu`
-        : 'Hiển thị 0 / 0 tài khoản mẫu';
+        ? `Hiển thị ${start + 1}–${Math.min(start + accountPageSize, matches.length)} / ${matches.length} tài khoản`
+        : 'Hiển thị 0 / 0 tài khoản';
     document.getElementById('account-page-label').textContent = `${accountPage} / ${pages}`;
     previousAccountPage.disabled = accountPage === 1;
     nextAccountPage.disabled = accountPage === pages;
@@ -42,22 +42,24 @@ const accountDialog = document.getElementById('account-dialog');
 const accountForm = document.getElementById('account-form');
 const adminCheckbox = document.getElementById('account-admin');
 const passwordInput = document.getElementById('account-password');
-const accountNotice = document.getElementById('account-notice');
-function showAccountNotice(text) { accountNotice.textContent = text; accountNotice.hidden = false; }
 function updateGlobalAccess() {
     document.getElementById('warehouse-permissions').disabled = adminCheckbox.checked;
     document.getElementById('global-access-note').hidden = !adminCheckbox.checked;
 }
 function openAccount(account = null) {
     accountForm.reset();
+    accountForm.querySelector('[data-form-error]').hidden = true;
+    document.getElementById('account-record-id').value = account?.id || '';
+    document.getElementById('account-version').value = account?.version || '';
     document.getElementById('account-dialog-title').textContent = account ? 'Chỉnh sửa tài khoản' : 'Thêm tài khoản';
     document.getElementById('account-username').value = account?.username || '';
     document.getElementById('account-employee').value = account?.employee || '';
     document.getElementById('edit-account-status').value = account?.status || 'active';
     adminCheckbox.checked = account?.admin || false;
-    passwordInput.disabled = Boolean(account);
+    passwordInput.disabled = accountForm.dataset.preview === 'true' && Boolean(account);
     passwordInput.required = !account;
-    document.getElementById('new-password-field').hidden = Boolean(account);
+    document.getElementById('new-password-field').hidden = accountForm.dataset.preview === 'true' && Boolean(account);
+    document.getElementById('account-password-label').textContent = account ? 'Mật khẩu mới (để trống nếu giữ nguyên)' : 'Mật khẩu ban đầu';
     document.querySelectorAll('[data-warehouse-role]').forEach(select => { select.value = account?.warehouses[select.dataset.warehouseRole] || ''; });
     updateGlobalAccess();
     accountDialog.showModal();
@@ -68,17 +70,21 @@ document.querySelectorAll('.close-account-dialog').forEach(button => button.addE
 adminCheckbox.addEventListener('change', updateGlobalAccess);
 accountForm.addEventListener('submit', event => {
     event.preventDefault();
-    passwordInput.value = '';
-    showAccountNotice('Bạn vừa xem trước thao tác lưu tài khoản. Chưa có dữ liệu nào được lưu hoặc thay đổi.');
-    accountDialog.close();
+    submitManagementForm(accountForm, accountDialog, 'account-notice');
 });
 accountDialog.addEventListener('close', () => { passwordInput.value = ''; });
 const stateDialog = document.getElementById('account-state-dialog');
+const accountStateForm = document.getElementById('account-state-form');
+accountStateForm.querySelector('[data-close-state]').addEventListener('click', () => stateDialog.close());
+accountStateForm.addEventListener('submit', event => { event.preventDefault(); submitManagementForm(accountStateForm, stateDialog, 'account-notice'); });
 document.querySelectorAll('.account-state-preview').forEach(button => button.addEventListener('click', () => {
     const account = JSON.parse(button.closest('[data-account]').dataset.account);
+    accountStateForm.elements.id.value = account.id || '';
+    accountStateForm.elements.version.value = account.version || '';
+    accountStateForm.elements.status.value = account.status === 'active' ? 'locked' : 'active';
+    accountStateForm.querySelector('[data-form-error]').hidden = true;
     document.getElementById('account-state-title').textContent = account.status === 'active' ? 'Khóa tài khoản' : 'Mở khóa tài khoản';
     document.getElementById('account-state-description').textContent = `${account.status === 'active' ? 'Khóa' : 'Mở khóa'} tài khoản ${account.username}?`;
     stateDialog.returnValue = '';
     stateDialog.showModal();
 }));
-stateDialog.addEventListener('close', () => { if (stateDialog.returnValue === 'preview') showAccountNotice('Đã xem trước thao tác đổi trạng thái. Tài khoản mẫu và tài khoản thực tế chưa bị thay đổi.'); });

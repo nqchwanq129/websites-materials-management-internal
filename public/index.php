@@ -67,15 +67,38 @@ if (isset($_SESSION['user_id'])) {
     }
 }
 if (in_array($page, ['home', 'accounts', 'employees', 'audit'], true)) {
-    if ($user === null) redirectTo('login');
+    if ($user === null) {
+        if ($method === 'POST' && $page !== 'home') respondJson(['ok' => false, 'message' => 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.'], 401);
+        redirectTo('login');
+    }
     if ($page !== 'home' && (int) $user['is_super_admin'] !== 1) {
+        if ($method === 'POST') respondJson(['ok' => false, 'message' => 'Bạn không có quyền quản lý dữ liệu này.'], 403);
         http_response_code(403);
         exit('Bạn không có quyền truy cập trang quản lý này.');
     }
-    if ($page !== 'home' && $method !== 'GET') {
-        header('Allow: GET');
-        http_response_code(405);
-        exit('Trang giao diện mẫu chưa hỗ trợ lưu dữ liệu.');
+    if ($page !== 'home' && $method === 'POST') {
+        if ($page === 'audit') { header('Allow: GET'); respondJson(['ok' => false, 'message' => 'Nhật ký chỉ được đọc.'], 405); }
+        if (!validCsrfToken()) respondJson(['ok' => false, 'message' => 'Phiên xác nhận không hợp lệ. Hãy tải lại trang.'], 403);
+        try {
+            $message = saveManagement(connectDatabase(), $page, (string) $user['id'], $_POST);
+            $_SESSION['management_notice'] = $message;
+            respondJson(['ok' => true, 'message' => $message]);
+        } catch (DomainException $error) {
+            respondJson(['ok' => false, 'message' => $error->getMessage()], 422);
+        } catch (Throwable $error) {
+            error_log('QLVT management: ' . $error->getMessage());
+            respondJson(['ok' => false, 'message' => 'Không thể lưu lúc này. Dữ liệu chưa bị thay đổi. Vui lòng thử lại.'], 503);
+        }
+    }
+    if ($page !== 'home') {
+        try { $managementData = loadManagement(connectDatabase(), $page); }
+        catch (Throwable $error) {
+            error_log('QLVT management read: ' . $error->getMessage());
+            http_response_code(503);
+            exit('Không thể tải dữ liệu lúc này. Vui lòng thử lại sau.');
+        }
+        $managementNotice = $_SESSION['management_notice'] ?? '';
+        unset($_SESSION['management_notice']);
     }
     require dirname(__DIR__) . '/resources/views/' . ($page === 'home' ? 'dashboard/home.php' : $page . '/index.php');
     exit;

@@ -28,7 +28,7 @@ function filterAudit(resetPage = true) {
     auditPage = Math.min(auditPage, pages);
     const start = (auditPage - 1) * auditPageSize;
     matches.slice(start, start + auditPageSize).forEach(row => { row.hidden = false; });
-    document.getElementById('audit-count').textContent = matches.length ? `Hiển thị ${start + 1}–${Math.min(start + auditPageSize, matches.length)} / ${matches.length} bản ghi mẫu` : 'Hiển thị 0 / 0 bản ghi mẫu';
+    document.getElementById('audit-count').textContent = matches.length ? `Hiển thị ${start + 1}–${Math.min(start + auditPageSize, matches.length)} / ${matches.length} bản ghi` : 'Hiển thị 0 / 0 bản ghi';
     document.getElementById('audit-page-label').textContent = `${auditPage} / ${pages}`;
     previousAuditPage.disabled = auditPage === 1;
     nextAuditPage.disabled = auditPage === pages;
@@ -44,7 +44,7 @@ document.getElementById('audit-reset').addEventListener('click', () => {
 });
 filterAudit();
 const auditDialog = document.getElementById('audit-dialog');
-const auditFields = { username: 'Tên đăng nhập', full_name: 'Họ và tên', email: 'Email', phone: 'Số điện thoại', status: 'Trạng thái', name: 'Tên', code: 'Mã hàng', unit: 'Đơn vị', specifications: 'Quy cách', number: 'Số phiếu / quyết định', reason: 'Lý do', cancel_reason: 'Lý do hủy', total_before_tax: 'Giá trị trước thuế', is_super_admin: 'Quản trị viên toàn hệ thống', decision_type: 'Loại quyết định', issued_date: 'Ngày ban hành' };
+const auditFields = { id: 'ID', employee_id: 'Nhân viên liên kết', warehouse_id: 'Kho làm việc', warehouses: 'Quyền theo kho', password_changed: 'Đã đổi mật khẩu', username: 'Tên đăng nhập', full_name: 'Họ và tên', email: 'Email', phone: 'Số điện thoại', status: 'Trạng thái', name: 'Tên', code: 'Mã', unit: 'Đơn vị', specifications: 'Quy cách', number: 'Số phiếu / quyết định', reason: 'Lý do', cancel_reason: 'Lý do hủy', total_before_tax: 'Giá trị trước thuế', is_super_admin: 'Quản trị viên toàn hệ thống', decision_type: 'Loại quyết định', issued_date: 'Ngày ban hành' };
 function auditValue(data, key) {
     if (!data || !Object.hasOwn(data, key)) return 'Chưa có dữ liệu';
     const value = data[key];

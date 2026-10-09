@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 require_once dirname(__DIR__) . '/config/database.php';
 require_once __DIR__ . '/auth.php';
+require_once __DIR__ . '/management.php';
 
 header('Content-Type: text/html; charset=utf-8');
 header('Cache-Control: no-store');
@@ -37,5 +38,13 @@ function validCsrfToken(): bool
 function redirectTo(string $page): never
 {
     header('Location: index.php?page=' . $page, true, 303);
+    exit;
+}
+
+function respondJson(array $data, int $status = 200): never
+{
+    http_response_code($status);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
     exit;
 }

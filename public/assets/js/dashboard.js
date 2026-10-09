@@ -87,3 +87,34 @@ if (search && warehouse) {
     search.addEventListener('input', filterReceipts);
     warehouse.addEventListener('change', filterReceipts);
 }
+
+async function submitManagementForm(form, dialog, noticeId) {
+    const error = form.querySelector('[data-form-error]');
+    if (form.dataset.preview === 'true') {
+        const password = form.querySelector('input[type=password]');
+        if (password) password.value = '';
+        const notice = document.getElementById(noticeId);
+        notice.textContent = 'Bản xem trước: chưa có dữ liệu nào được lưu hoặc thay đổi.';
+        notice.hidden = false;
+        dialog.close();
+        return;
+    }
+    const payload = new FormData(form);
+    const buttons = [...form.querySelectorAll('button')].filter(button => button.type === 'submit');
+    buttons.forEach(button => { button.disabled = true; });
+    error.hidden = true;
+    try {
+        const response = await fetch(form.action, { method: 'POST', body: payload, headers: { Accept: 'application/json' }, credentials: 'same-origin' });
+        if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('Phiên đăng nhập đã kết thúc. Hãy tải lại trang.');
+        const result = await response.json();
+        if (!response.ok || !result.ok) throw new Error(result.message || 'Không thể lưu dữ liệu.');
+        window.location.assign(form.action);
+    } catch (failure) {
+        error.textContent = failure.message || 'Không thể kết nối. Vui lòng thử lại.';
+        error.hidden = false;
+    } finally {
+        const password = form.querySelector('input[type=password]');
+        if (password) password.value = '';
+        buttons.forEach(button => { button.disabled = false; });
+    }
+}

@@ -18,6 +18,19 @@ function userCanSignIn(?array $user): bool
         && ($user['employee_id'] === null || $user['employee_status'] === 'active');
 }
 
+function warehousePermission(PDO $pdo, string $userId, string $warehouseId): ?string
+{
+    $user = findUser($pdo, 'id', $userId);
+    if (!userCanSignIn($user)) return null;
+    $statement = $pdo->prepare('SELECT status FROM warehouses WHERE id=?');
+    $statement->execute([$warehouseId]);
+    if ($statement->fetchColumn() !== 'active') return null;
+    if ((int) $user['is_super_admin'] === 1) return 'keeper';
+    $statement = $pdo->prepare('SELECT role FROM user_warehouses WHERE user_id=? AND warehouse_id=?');
+    $statement->execute([$userId, $warehouseId]);
+    return $statement->fetchColumn() ?: null;
+}
+
 function authenticateUser(PDO $pdo, string $username, string $password, string $address): array
 {
     $directory = dirname(__DIR__) . '/storage/login-attempts';

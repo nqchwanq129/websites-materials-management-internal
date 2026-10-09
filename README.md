@@ -41,8 +41,8 @@ attempts from an IP address block further attempts for the current 5-minute wind
 
 The database already has `users.id` as its primary key and a unique index on
 `users.username`. No additional keys or changes to business tables were needed
-for login. Authentication currently does not use foreign keys or warehouse roles
-to grant access to business functions.
+for login. Management now uses the existing foreign keys in `users`, `employees`,
+`warehouses`, `user_warehouses` and `audit_logs`; no schema changes are required.
 
 The root `.htaccess` blocks HTTP access to project files outside `public/` when
 running under XAMPP. Keep Apache's `AllowOverride All` enabled, or point your
@@ -60,13 +60,14 @@ navigation and responsive layouts. The browser check renders a test account
 directly in its browser session; it does not create database records.
 
 Super admins can open **Hệ thống → Tài khoản & phân quyền** at
-`public/index.php?page=accounts`. This is a UI preview with sample accounts,
-employee links, active/locked states, a global super-admin option and individual
-keeper/viewer roles for each warehouse. Create/edit and lock/unlock dialogs do
-not send or save account data. The account list displays directly; permissions
-are configured inside the create/edit form. Business authorization will be
-implemented separately. Account routes require
-a signed-in super admin and reject POST requests. Dashboard pages share the
+`public/index.php?page=accounts`. The page reads real accounts and warehouse
+permissions from MySQL. Create/edit, password reset, employee linking and
+lock/unlock actions save to the database. Passwords are hashed with native PHP
+and never returned to the UI or audit history. Permissions are configured inside
+the account form: global super admin, or keeper/viewer at individual warehouses.
+`warehousePermission()` checks current user, employee and warehouse status;
+future warehouse operations must use it to enforce their read/write permissions.
+Management routes require a signed-in super admin. Dashboard pages share the
 sidebar/header/footer templates under `resources/views/layouts/`.
 Use `php tests/home.php --accounts` to render-check the account UI without a DB.
 The browser check also covers account filters, forms and warehouse role selection.
@@ -75,22 +76,43 @@ Account lists show at most **10 accounts per page**. Searching or changing a
 filter resets to the first page; pagination applies to the matching accounts.
 
 Super admins can open **Danh mục → Nhân viên** at `public/index.php?page=employees`.
-The employee UI uses 12 sample records with code, full name, email, phone,
+The employee UI reads real records with code, full name, email, phone,
 required workplace warehouse and active/inactive status. It shows linked
 accounts as information; account links and access roles are managed separately.
 Search, status/warehouse/account-link filters and 10-row pagination work locally.
-Create/edit and activate/deactivate dialogs are previews only and make no writes.
-The route rejects POST requests. Run `php tests/home.php --employees` for a
+Create/edit and activate/deactivate actions save to MySQL. Deactivating an employee
+also prevents associated accounts from signing in or accessing warehouses.
+A real active warehouse must exist before adding an employee; the app does not
+create placeholder warehouses. Run `php tests/home.php --employees` for a
 database-free rendering check; `node tests/home-ui.mjs` also checks employee UI.
 
 Super admins can open **Hệ thống → Nhật ký thao tác** at `public/index.php?page=audit`.
-This read-only preview contains 14 sample audit events reflecting `audit_logs`:
+This read-only page queries `audit_logs`:
 actor, warehouse/global scope, action, entity and before/after data. Search,
 inclusive date-range filters, action/entity/warehouse filters and 10-row pagination
 work locally. Details highlight changed fields and display system-generated
-events without a user. No audit records are queried, edited or deleted.
+events without a user. Account/employee writes and their before/after audit data
+commit in the same transaction; failures roll back both. Audit history cannot be
+edited or deleted through the app. Existing database immutability triggers are
+preserved. New events use Vietnam time (UTC+7).
 Run `php tests/home.php --audit` for a database-free rendering check;
 `node tests/home-ui.mjs` also checks audit filters, diffs and responsive dialogs.
+
+Management POSTs require CSRF tokens and server-side validation. Duplicate names,
+invalid references, stale edits and removing the current administrator's access
+are rejected. Locking an account revokes its session at the next request.
+Each list shows **10 rows per page**; filters and pagination currently operate
+on the full result set in the browser. Move these to SQL when data grows.
+
+Run `php tests/management.php` with XAMPP PHP 8.2 to check real HTTP management
+writes, authorization, password hashing, grants/revocation, validation, stale
+edits, rollback and audit consistency. The check clones the schema, including
+foreign keys and triggers, into a randomly named test database and serves a
+temporary app copy on localhost. It drops only that test database afterward;
+the configured MySQL user needs CREATE/DROP DATABASE privileges. No application
+configuration or production records are changed by this check.
+UI fixtures live only in `tests/fixtures/`; production management pages never
+fall back to sample data. The home dashboard remains a UI preview.
 
 Form dialogs keep the title/description and bottom Cancel/Save actions fixed.
 Only the main form body scrolls. Use this same layout for future create/edit

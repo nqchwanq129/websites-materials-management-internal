@@ -1,0 +1,171 @@
+<?php
+declare(strict_types=1);
+// XAMPP required. Clone the schema into an isolated database and serve a temporary app copy.
+require dirname(__DIR__) . '/config/database.php';
+require dirname(__DIR__) . '/app/auth.php';
+require dirname(__DIR__) . '/app/management.php';
+function verify(bool $value, string $message): void { if (!$value) throw new RuntimeException($message); }
+function rejected(callable $operation): void {
+    try { $operation(); } catch (DomainException $error) { return; }
+    throw new RuntimeException('An invalid mutation was accepted.');
+}
+$source = connectDatabase();
+$database = 'qlvt_management_test_' . bin2hex(random_bytes(5));
+$testRoot = sys_get_temp_dir() . '/qlvt-mgmt-' . bin2hex(random_bytes(5));
+$server = null;
+$pdo = $source;
+$original = $source->query('SELECT DATABASE()')->fetchColumn();
+$prefix = 'mgmt-check-' . bin2hex(random_bytes(5));
+$actorId = null;
+$cookie = '';
+$base = getenv('LOGIN_URL') ?: 'http://localhost/qlvt-remake/public/';
+function httpManagement(string $page, ?array $fields = null): array {
+    global $base, $cookie;
+    $context = stream_context_create(['http' => ['method' => $fields === null ? 'GET' : 'POST',
+        'header' => "Cookie: $cookie\r\nContent-Type: application/x-www-form-urlencoded\r\n",
+        'content' => $fields === null ? '' : http_build_query($fields), 'ignore_errors' => true, 'follow_location' => 0, 'timeout' => 10]]);
+    $body = file_get_contents($base . 'index.php?page=' . $page, false, $context);
+    verify($body !== false, 'Cannot reach XAMPP.');
+    foreach ($http_response_header as $header) if (preg_match('/^Set-Cookie: (qlvt_session=[^;]*)/i', $header, $match)) $cookie = $match[1];
+    preg_match('/\s(\d{3})\s/', $http_response_header[0], $match);
+    return [(int) $match[1], $body];
+}
+function tokenFrom(string $body): string {
+    preg_match('/name="csrf_token" value="([a-f0-9]{64})"/', $body, $match);
+    verify(isset($match[1]), 'Missing CSRF: ' . substr(strip_tags($body), 0, 1500));
+    return $match[1];
+}
+try {
+    $source->exec("CREATE DATABASE `$database` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+    $source->exec("USE `$database`");
+    $config = parse_ini_file(dirname(__DIR__) . '/.env', false, INI_SCANNER_RAW);
+    $original = $config['DB_NAME'];
+    $foreignKeys = [];
+    foreach ($source->query("SHOW TABLES FROM `$original`")->fetchAll(PDO::FETCH_COLUMN) as $table) {
+        $definition = $source->query("SHOW CREATE TABLE `$original`.`$table`")->fetch(PDO::FETCH_NUM)[1];
+        $lines = explode("\n", $definition);
+        $lines = array_filter($lines, static function ($line) use (&$foreignKeys, $table) {
+            if (str_contains($line, 'CONSTRAINT') && str_contains($line, 'FOREIGN KEY')) {
+                $foreignKeys[] = "ALTER TABLE `$table` ADD " . rtrim(trim($line), ',');
+                return false;
+            }
+            return true;
+        });
+        $source->exec(preg_replace('/,\n\)/', "\n)", implode("\n", $lines)));
+    }
+    foreach ($foreignKeys as $sql) $source->exec($sql);
+    foreach ($source->query("SHOW TRIGGERS FROM `$original`")->fetchAll() as $trigger) {
+        $source->exec("CREATE TRIGGER `{$trigger['Trigger']}` {$trigger['Timing']} {$trigger['Event']} ON `{$trigger['Table']}` FOR EACH ROW " . $trigger['Statement']);
+    }
+    mkdir($testRoot);
+    mkdir($testRoot . '/storage');
+    foreach (['app', 'config', 'resources', 'public'] as $directory) {
+        $path = dirname(__DIR__) . '/' . $directory;
+        $files = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($path, FilesystemIterator::SKIP_DOTS), RecursiveIteratorIterator::SELF_FIRST);
+        mkdir($testRoot . '/' . $directory);
+        foreach ($files as $file) {
+            $target = $testRoot . '/' . $directory . '/' . substr($file->getPathname(), strlen($path) + 1);
+            if ($file->isDir()) mkdir($target); else copy($file->getPathname(), $target);
+        }
+    }
+    file_put_contents($testRoot . '/.env', preg_replace('/^DB_NAME\s*=.*$/m', 'DB_NAME=' . $database, file_get_contents(dirname(__DIR__) . '/.env')));
+    $socket = stream_socket_server('tcp://127.0.0.1:0');
+    $address = stream_socket_get_name($socket, false); fclose($socket);
+    $base = 'http://' . $address . '/';
+    $server = proc_open([PHP_BINARY, '-d', 'session.save_path=' . $testRoot . '/storage', '-S', $address, '-t', $testRoot . '/public'], [0 => ['pipe', 'r'], 1 => ['file', $testRoot . '/server.log', 'a'], 2 => ['file', $testRoot . '/server.log', 'a']], $pipes);
+    verify(is_resource($server), 'Cannot start isolated PHP server.');
+    fclose($pipes[0]);
+    for ($attempt = 0; $attempt < 100; $attempt++) {
+        $ready = @stream_socket_client('tcp://' . $address, $errno, $error, 0.1);
+        if ($ready) { fclose($ready); break; }
+        usleep(30000);
+    }
+    $password = bin2hex(random_bytes(16));
+    $pdo->prepare('INSERT INTO users (username,password_hash,is_super_admin) VALUES (?,?,1)')->execute([$prefix, password_hash($password, PASSWORD_DEFAULT)]);
+    $actorId = $pdo->lastInsertId();
+    $warehouseIds = [];
+    foreach ([1, 2] as $number) {
+        $pdo->prepare('INSERT INTO warehouses (code,name,created_by) VALUES (?,?,?)')->execute([$prefix . '-' . $number, 'Test warehouse ' . $number, $actorId]);
+        $warehouseIds[] = $pdo->lastInsertId();
+    }
+    [, $body] = httpManagement('login');
+    verify(httpManagement('login', ['username' => $prefix, 'password' => $password, 'csrf_token' => tokenFrom($body)])[0] === 303, 'Test login failed.');
+    [, $body] = httpManagement('employees');
+    $csrf = tokenFrom($body);
+    $employeeInput = ['csrf_token' => $csrf, 'action' => 'save', 'code' => $prefix, 'full_name' => 'Người thử <script>',
+        'email' => 'test@example.com', 'phone' => '', 'warehouse' => $warehouseIds[0], 'status' => 'active'];
+    verify(httpManagement('employees', array_diff_key($employeeInput, ['csrf_token' => true]))[0] === 403, 'CSRF bypass.');
+    verify(httpManagement('employees', $employeeInput)[0] === 200, 'Employee creation failed.');
+    $stmt = $pdo->prepare('SELECT id FROM employees WHERE code=?'); $stmt->execute([$prefix]); $employeeId = (string) $stmt->fetchColumn();
+    $employee = managementSnapshot($pdo, 'employees', $employeeId);
+    verify($employee['full_name'] === 'Người thử <script>', 'Employee was not persisted.');
+    rejected(fn() => saveManagement($pdo, 'employees', $actorId, $employeeInput));
+    $accountInput = ['csrf_token' => $csrf, 'action' => 'save', 'username' => $prefix . '-user', 'password' => $password,
+        'employee' => $employeeId, 'admin' => '0', 'status' => 'active', 'warehouses' => [$warehouseIds[0] => 'keeper', $warehouseIds[1] => 'viewer']];
+    verify(httpManagement('accounts', $accountInput)[0] === 200, 'Account and warehouse grants failed.');
+    $createdUser = findUser($pdo, 'username', $prefix . '-user');
+    $targetId = (string) $createdUser['id'];
+    verify(password_verify($password, $createdUser['password_hash']), 'Password not hashed correctly.');
+    verify(warehousePermission($pdo, $targetId, $warehouseIds[0]) === 'keeper', 'Keeper role failed.');
+    verify(warehousePermission($pdo, $targetId, $warehouseIds[1]) === 'viewer', 'Viewer role failed.');
+    rejected(fn() => saveManagement($pdo, 'employees', $targetId, $employeeInput));
+    $before = managementSnapshot($pdo, 'accounts', $targetId);
+    $update = $accountInput + ['id' => $targetId, 'version' => $before['updated_at']];
+    $update['password'] = '';
+    $update['warehouses'] = [$warehouseIds[0] => 'viewer'];
+    verify(httpManagement('accounts', $update)[0] === 200, 'Role update failed.');
+    verify(warehousePermission($pdo, $targetId, $warehouseIds[0]) === 'viewer' && warehousePermission($pdo, $targetId, $warehouseIds[1]) === null, 'Roles not updated/revoked.');
+    rejected(fn() => saveManagement($pdo, 'accounts', $actorId, $update));
+    $current = managementSnapshot($pdo, 'accounts', $targetId);
+    $invalid = $update; $invalid['version'] = $current['updated_at']; $invalid['username'] = $prefix . '-invalid'; $invalid['warehouses'] = ['999999999' => 'keeper'];
+    rejected(fn() => saveManagement($pdo, 'accounts', $actorId, $invalid));
+    verify(findUser($pdo, 'id', $targetId)['username'] === $prefix . '-user', 'Failed mutation did not roll back.');
+    $actor = managementSnapshot($pdo, 'accounts', $actorId);
+    rejected(fn() => saveManagement($pdo, 'accounts', $actorId, ['action' => 'state', 'id' => $actorId, 'version' => $actor['updated_at'], 'status' => 'locked']));
+    verify(userCanSignIn(findUser($pdo, 'id', $actorId)), 'Self-lock protection failed.');
+    $employee = managementSnapshot($pdo, 'employees', $employeeId);
+    saveManagement($pdo, 'employees', $actorId, ['action' => 'state', 'id' => $employeeId, 'version' => $employee['updated_at'], 'status' => 'inactive']);
+    verify(!userCanSignIn(findUser($pdo, 'id', $targetId)) && warehousePermission($pdo, $targetId, $warehouseIds[0]) === null, 'Inactive employee retained access.');
+    [, $body] = httpManagement('accounts');
+    verify(str_contains($body, $prefix . '-user') && !str_contains($body, $createdUser['password_hash']) && !str_contains($body, $password), 'Account UI leaks secrets or misses real data.');
+    [, $body] = httpManagement('employees');
+    verify(str_contains($body, 'Người thử &lt;script&gt;'), 'Stored employee text must be escaped.');
+    $stmt = $pdo->prepare('SELECT * FROM audit_logs WHERE user_id=? ORDER BY id'); $stmt->execute([$actorId]); $logs = $stmt->fetchAll();
+    verify(count($logs) === 4, 'Every successful change must create one audit record; failed changes must not.');
+    verify($logs[2]['action'] === 'assign_access' && $logs[3]['action'] === 'deactivate', 'Audit actions incorrect.');
+    foreach ($logs as $log) verify(!str_contains($log['after_data'], $password) && !str_contains($log['after_data'], 'password_hash'), 'Audit log contains password data.');
+    [, $body] = httpManagement('audit');
+    verify(str_contains($body, $prefix . '-user') && !str_contains($body, $password), 'Audit UI misses committed history.');
+    $current = managementSnapshot($pdo, 'accounts', $targetId);
+    $update['version'] = $current['updated_at']; $update['password'] = 'changed-' . bin2hex(random_bytes(10));
+    verify(httpManagement('accounts', $update)[0] === 200, 'Password reset failed.');
+    verify(password_verify($update['password'], findUser($pdo, 'id', $targetId)['password_hash']), 'Reset password not persisted.');
+    $stmt->execute([$actorId]); $updatedLogs = $stmt->fetchAll();
+    $latest = $updatedLogs[array_key_last($updatedLogs)];
+    verify(json_decode($latest['after_data'], true)['password_changed'] === true && !str_contains($latest['after_data'], $update['password']), 'Password reset must be audited without the secret.');
+    foreach (['locked', 'active'] as $status) {
+        $current = managementSnapshot($pdo, 'accounts', $targetId);
+        verify(httpManagement('accounts', ['csrf_token' => $csrf, 'action' => 'state', 'id' => $targetId, 'version' => $current['updated_at'], 'status' => $status])[0] === 200, 'Account state change failed.');
+        verify(findUser($pdo, 'id', $targetId)['status'] === $status, 'Account state not persisted.');
+    }
+    try { $pdo->exec('DELETE FROM audit_logs'); throw new RuntimeException('Immutable audit trigger missing.'); }
+    catch (PDOException $error) { verify($error->getCode() === '45000', 'Unexpected audit trigger error.'); }
+    $pdo->exec("CREATE TRIGGER test_audit_failure BEFORE INSERT ON audit_logs FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Test audit failure'");
+    $current = managementSnapshot($pdo, 'accounts', $targetId);
+    try {
+        saveManagement($pdo, 'accounts', $actorId, ['action' => 'state', 'id' => $targetId, 'version' => $current['updated_at'], 'status' => 'locked']);
+        throw new RuntimeException('Write committed without its audit record.');
+    } catch (PDOException $error) { verify($error->getCode() === '45000', 'Unexpected audit insertion error.'); }
+    verify(managementSnapshot($pdo, 'accounts', $targetId) === $current, 'Audit insertion failure must roll back the data write.');
+    echo "PASS: real HTTP saves, CSRF, validation, hashing, employee linking, warehouse grants/revocation, stale writes, rollback, self-lock protection and atomic audit history.\n";
+} finally {
+    if (is_resource($server)) { proc_terminate($server); proc_close($server); }
+    $source->exec("USE `$original`");
+    if (preg_match('/^qlvt_management_test_[a-f0-9]{10}$/D', $database)) $source->exec("DROP DATABASE IF EXISTS `$database`");
+    if (is_dir($testRoot)) {
+        verify(dirname(realpath($testRoot)) === realpath(sys_get_temp_dir()) && preg_match('/^qlvt-mgmt-[a-f0-9]{10}$/D', basename($testRoot)), 'Unsafe temporary cleanup path.');
+        $files = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($testRoot, FilesystemIterator::SKIP_DOTS), RecursiveIteratorIterator::CHILD_FIRST);
+        foreach ($files as $file) { if ($file->isDir()) rmdir($file->getPathname()); else unlink($file->getPathname()); }
+        rmdir($testRoot);
+    }
+}
