@@ -1,5 +1,6 @@
 <?php
 declare(strict_types=1);
+require_once __DIR__ . '/decisions.php';
 
 function managementText(array $input, string $key, int $max, bool $required = false): string
 {
@@ -44,8 +45,9 @@ function managementSnapshot(PDO $pdo, string $page, string $id): ?array
     return $row;
 }
 
-function saveManagement(PDO $pdo, string $page, string $actorId, array $input): string
+function saveManagement(PDO $pdo, string $page, string $actorId, array $input, array $files = []): string
 {
+    if ($page === 'decisions') return saveDecision($pdo, $actorId, $input, $files);
     if (!in_array($page, ['accounts', 'employees', 'warehouses'], true)) throw new DomainException('Không được thay đổi nhật ký.');
     $action = managementText($input, 'action', 20, true);
     if (!in_array($action, ['save', 'state', 'delete'], true) || ($action === 'delete' && $page === 'accounts')) throw new DomainException('Thao tác không hợp lệ.');
@@ -265,6 +267,34 @@ function loadManagement(PDO $pdo, string $page): array
             $row['last_received_date'] = $row['receipts'][0]['received_date'] ?? '';
             $data['suppliers'][] = $row;
         }
+    } elseif ($page === 'decisions') {
+        $data['decisionLines'] = [];
+        $attachments = [];
+        foreach ($pdo->query('SELECT id,decision_id,original_name FROM attachments WHERE decision_id IS NOT NULL ORDER BY id') as $file) $attachments[$file['decision_id']][] = $file;
+        $items = [];
+        foreach (['import' => ['import_bill_details', 'import_bill', 'import_bill_id', 'received_date', 'received_quantity'],
+            'export' => ['export_bill_details', 'export_bill', 'export_bill_id', 'issued_date', 'issued_quantity']] as $direction => [$details, $bills, $billId, $date, $quantity]) {
+            foreach ($pdo->query("SELECT d.id,d.updated_at AS version,d.decision_id,d.decision_status,d.product_id,d.product_name,d.unit,d.$quantity AS quantity,b.warehouse_id,b.number,b.$date AS date,b.status,w.name AS warehouse_name
+                FROM $details d JOIN $bills b ON b.id=d.$billId JOIN warehouses w ON w.id=b.warehouse_id
+                WHERE d.decision_id IS NOT NULL OR (d.decision_status='pending' AND b.status='confirmed') ORDER BY b.$date DESC,d.id DESC") as $item) {
+                $item['id'] = (string) $item['id'];
+                $item['direction'] = $direction;
+                $data['decisionLines'][] = $item;
+                if ($item['decision_id'] !== null) $items[$item['decision_id']][] = $item;
+            }
+        }
+        $data['decisions'] = $pdo->query('SELECT d.id,d.updated_at AS version,d.number,d.issued_date,d.decision_type,d.issuing_authority,d.content,d.warehouse_id,w.name AS warehouse_name
+            FROM decisions d JOIN warehouses w ON w.id=d.warehouse_id ORDER BY d.issued_date DESC,d.id DESC')->fetchAll();
+        foreach ($data['decisions'] as &$row) {
+            $row['id'] = (string) $row['id']; $row['content'] ??= '';
+            $row['items'] = $items[$row['id']] ?? [];
+            $row['attachments'] = $attachments[$row['id']] ?? [];
+            $links = ['import' => [], 'export' => []];
+            foreach ($row['items'] as $item) $links[$item['direction']][$item['id']] = $item['version'];
+            $row['links_version'] = decisionLinksVersion($links);
+            $row['import_count'] = count(array_filter($row['items'], static fn($item) => $item['direction'] === 'import'));
+            $row['export_count'] = count($row['items']) - $row['import_count'];
+        } unset($row);
     } elseif ($page === 'audit') {
         $data['logs'] = [];
         foreach ($pdo->query('SELECT a.*,u.username,e.full_name,w.name AS warehouse_name FROM audit_logs a

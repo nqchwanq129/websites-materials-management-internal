@@ -159,3 +159,7 @@ dialogs, including on short screens and mobile landscape.
 
 The existing `reference_source/` directory is kept locally as a reference
 and is not part of the project history.
+
+Decision list: `index.php?page=decisions` reads real database records (super admin only), with search, type/warehouse/link filters and 10 rows per page. Details show linked import and export lines; quantities retain DECIMAL precision. Only the list remains in the Decisions sidebar group. Create/edit decisions and select existing receipt lines in the same dialog. New links require confirmed receipts, a matching active warehouse, and pending lines without another decision. Removing a selection returns that line to pending. Concurrent decision/line changes reject stale forms; changes and attachments are audited atomically.
+
+Decision PDF attachments use the existing `attachments` table (`decision_id`, `original_name`, `storage_path`, `mime_type`, `created_by`); no schema change is needed. Upload one PDF per save (maximum 2 MiB), with server-side extension, MIME and signature validation. Files are appended to existing attachments and stored with random names in `storage/uploads/decisions/`, outside the public directory and excluded from Git. Download through `index.php?page=decision-file&id=...` requires an active super-admin session. Back up both the database and `storage/uploads/`; a source-code commit does not contain uploaded documents. Failed database/audit writes roll back metadata and remove the newly uploaded file.

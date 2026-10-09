@@ -574,6 +574,86 @@ try {
         writeFileSync(join(outputDir, `supplier-detail-${width}x${height}.png`), Buffer.from(detail.data, 'base64'));
         await evaluate('supplierDialog.querySelector("footer button").click()');
     }
+    const decisionRender = spawnSync(php, ['tests/home.php', '--decisions', '--render'], { encoding: 'utf8', windowsHide: true });
+    assert.equal(decisionRender.status, 0, decisionRender.stderr);
+    await page('Page.navigate', { url: process.env.LOGIN_URL || 'http://localhost/qlvt-remake/public/' });
+    for (let i = 0; i < 100; i++) {
+        if (await evaluate('document.readyState === "complete" && Boolean(document.getElementById("login-form"))')) break;
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    const decisionFrame = await page('Page.getFrameTree');
+    await page('Page.setDocumentContent', { frameId: decisionFrame.frameTree.frame.id, html: decisionRender.stdout });
+    for (let i = 0; i < 100; i++) {
+        if (await evaluate('document.readyState === "complete" && typeof filterDecisions === "function"')) break;
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    assert.equal(await evaluate('document.querySelectorAll("[data-decision]:not([hidden])").length'), 10);
+    assert.equal(await evaluate(`document.querySelector('a[href="index.php?page=decisions"]').closest('.nav-children').children.length`), 1);
+    await evaluate('document.getElementById("decision-page-next").click()');
+    assert.equal(await evaluate('document.querySelectorAll("[data-decision]:not([hidden])").length'), 2);
+    for (const [filter, value, count] of [['decisionType', 'increase', 3], ['decisionWarehouse', '1', 6], ['decisionLinked', 'unlinked', 4]]) {
+        await evaluate(`decisionType.value=''; decisionWarehouse.value=''; decisionLinked.value=''; ${filter}.value='${value}'; filterDecisions()`);
+        assert.equal(await evaluate('document.querySelectorAll("[data-decision]:not([hidden])").length'), count);
+        assert.equal(await evaluate('decisionPage'), 1);
+    }
+    await evaluate('decisionLinked.value=""; decisionSearch.value="quyet dinh"; filterDecisions()');
+    assert.equal(await evaluate('document.getElementById("decision-count").textContent.endsWith("/ 12 quyết định")'), true);
+    await evaluate('decisionSearch.value="missing-decision"; filterDecisions()');
+    assert.equal(await evaluate('document.querySelector(".decision-empty").hidden'), false);
+    await evaluate('decisionSearch.value=""; filterDecisions(); document.querySelectorAll(".decision-details")[2].click()');
+    assert.equal(await evaluate('document.getElementById("decision-item-empty").hidden'), false);
+    await evaluate('decisionDialog.close()');
+    for (const [width, height] of [[1440, 1000], [390, 844], [320, 568], [844, 390]]) {
+        await page('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+        await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+        assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, 'Decision page overflow.');
+        let shot = await page('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+        writeFileSync(join(outputDir, `decisions-${width}x${height}.png`), Buffer.from(shot.data, 'base64'));
+        await evaluate('document.querySelector(".decision-details").click()');
+        assert.equal(await evaluate('document.querySelectorAll("#decision-item-rows tr").length'), 14);
+        assert.equal(await evaluate('document.querySelector("#decision-item-rows tr td:nth-child(4)").textContent'), '12345678901234.123456 Chiếc');
+        assert.equal(await evaluate('document.getElementById("decision-detail-content").querySelector("script") === null'), true);
+        assert.equal(await evaluate(`(() => {
+            const body=decisionDialog.querySelector('.account-dialog-body'), header=decisionDialog.querySelector('header'), footer=decisionDialog.querySelector('footer');
+            const before=[header.getBoundingClientRect().top,footer.getBoundingClientRect().top]; body.scrollTop=body.scrollHeight;
+            return before[0]===header.getBoundingClientRect().top && before[1]===footer.getBoundingClientRect().top
+                && decisionDialog.scrollHeight<=decisionDialog.clientHeight+1 && decisionDialog.scrollWidth<=decisionDialog.clientWidth
+                && footer.getBoundingClientRect().bottom<=innerHeight;
+        })()`), true, 'Decision title/footer must remain fixed and fit viewport.');
+        await evaluate('decisionDialog.querySelector(".account-dialog-body").scrollTop=0');
+        shot = await page('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+        writeFileSync(join(outputDir, `decision-detail-${width}x${height}.png`), Buffer.from(shot.data, 'base64'));
+        await evaluate('decisionDialog.querySelector("footer button").click()');
+    }
+    await evaluate('document.querySelector(".edit-decision").click()');
+    assert.equal(await evaluate('document.querySelectorAll("#decision-line-options input:checked").length'), 14, 'Editing must preserve existing links.');
+    assert.equal(await evaluate('document.querySelectorAll("#decision-line-options tr:not([hidden])").length'), 14, 'Other decisions must not appear as selectable lines.');
+    await evaluate('document.getElementById("decision-line-search").value="missing"; updateDecisionLines()');
+    assert.equal(await evaluate('document.querySelectorAll("#decision-line-options input:checked").length'), 14, 'Search must retain selections.');
+    await evaluate('decisionEditor.close(); document.getElementById("create-decision").click(); decisionForm.elements.warehouse.value="1"; updateDecisionLines()');
+    assert.equal(await evaluate('document.querySelectorAll("#decision-line-options tr:not([hidden])").length'), 1);
+    await evaluate('document.querySelector("#decision-line-options input:not(:disabled)").click(); decisionForm.elements.warehouse.value="2"; updateDecisionLines()');
+    assert.equal(await evaluate('document.querySelectorAll("#decision-line-options input:checked").length'), 0, 'Warehouse change must clear incompatible selections.');
+    await evaluate(`decisionForm.elements.number.value='QD-NEW'; decisionForm.elements.issued_date.value='2026-10-09'; decisionForm.elements.issuing_authority.value='VISHIPEL'; decisionForm.elements.warehouse.value='1'; updateDecisionLines();
+        const files=new DataTransfer(); files.items.add(new File(['bad'], 'fake.php')); decisionForm.elements.pdf.files=files.files; decisionForm.requestSubmit()`);
+    assert.equal(await evaluate('decisionForm.querySelector("[data-form-error]").hidden'), false, 'Client must reject non-PDF files.');
+    await evaluate('decisionForm.elements.pdf.value=""; decisionForm.requestSubmit()');
+    assert.equal(await evaluate('decisionEditor.open'), false, 'Preview save should close the dialog without a request.');
+    for (const [width, height] of [[1440, 1000], [390, 844], [320, 568], [844, 390]]) {
+        await page('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+        await evaluate('document.querySelector(".edit-decision").click(); new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+        assert.equal(await evaluate(`(() => {
+            const body=decisionEditor.querySelector('.account-dialog-body'), header=decisionEditor.querySelector('header'), footer=decisionEditor.querySelector('footer');
+            const before=[header.getBoundingClientRect().top,footer.getBoundingClientRect().top]; body.scrollTop=body.scrollHeight;
+            return before[0]===header.getBoundingClientRect().top && before[1]===footer.getBoundingClientRect().top
+                && decisionEditor.scrollWidth<=decisionEditor.clientWidth && decisionEditor.scrollHeight<=decisionEditor.clientHeight+1
+                && footer.getBoundingClientRect().bottom<=innerHeight;
+        })()`), true, 'Decision editor title/footer must stay fixed on short/mobile screens.');
+        await evaluate('decisionEditor.querySelector(".account-dialog-body").scrollTop=0');
+        const shot = await page('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+        writeFileSync(join(outputDir, `decision-editor-${width}x${height}.png`), Buffer.from(shot.data, 'base64'));
+        await evaluate('decisionEditor.close()');
+    }
     assert.deepEqual(pageErrors, [], 'Browser errors.');
     assert.deepEqual(failedRequests, [], 'Asset loading errors.');
     assert.equal(postRequests, 0, 'Dashboard sample controls must not submit business data.');

@@ -5,7 +5,7 @@ $navigation = [
     ['down', 'Phiếu nhập kho', [['Danh sách phiếu nhập', 'index.php?page=home#receipts'], ['Tạo phiếu nhập', '']]],
     ['up', 'Phiếu xuất kho', [['Danh sách phiếu xuất', 'index.php?page=home#receipts'], ['Tạo phiếu xuất', '']]],
     ['warehouse', 'Kho hàng', [['Danh sách kho', (int) $user['is_super_admin'] === 1 ? 'index.php?page=warehouses' : ''], ['Tồn kho', '']]],
-    ['file', 'Quyết định', [['Danh sách quyết định', ''], ['Tăng vật tư', ''], ['Cấp phát vật tư', ''], ['Điều chuyển vật tư', ''], ['Giảm vật tư', '']]],
+    ['file', 'Quyết định', [['Danh sách quyết định', (int) $user['is_super_admin'] === 1 ? 'index.php?page=decisions' : '']]],
     ['chart', 'Báo cáo & thống kê', [['Nhập · xuất · tồn', ''], ['Báo cáo vật tư', ''], ['Báo cáo phụ tùng', ''], ['Báo cáo công cụ, dụng cụ', ''], ['Báo cáo tài sản cố định', '']]],
     ['users', 'Danh mục', [['Nhà cung cấp', (int) $user['is_super_admin'] === 1 ? 'index.php?page=suppliers' : ''], ['Nhân viên', (int) $user['is_super_admin'] === 1 ? 'index.php?page=employees' : '']]],
     ['shield', 'Hệ thống', [['Tài khoản & phân quyền', (int) $user['is_super_admin'] === 1 ? 'index.php?page=accounts' : ''], ['Nhật ký thao tác', (int) $user['is_super_admin'] === 1 ? 'index.php?page=audit' : '']]],
@@ -46,8 +46,9 @@ $icon = static fn(string $name): string => '<svg class="icon" aria-hidden="true"
     <link rel="stylesheet" href="assets/css/notifications.css">
     <script src="assets/vendor/simple-notify/simple-notify.min.js" defer></script>
     <script src="assets/js/dashboard.js" defer></script>
-    <?php if (in_array($activePage, ['accounts', 'employees', 'warehouses', 'suppliers', 'audit'], true)): ?><link rel="stylesheet" href="assets/css/accounts.css"><script src="assets/js/<?= $activePage ?>.js" defer></script><?php endif; ?>
-    <?php if ($activePage === 'suppliers'): ?><link rel="stylesheet" href="assets/css/audit.css"><?php endif; ?>
+    <?php if (in_array($activePage, ['accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'audit'], true)): ?><link rel="stylesheet" href="assets/css/accounts.css"><script src="assets/js/<?= $activePage ?>.js" defer></script><?php endif; ?>
+    <?php if (in_array($activePage, ['suppliers', 'decisions'], true)): ?><link rel="stylesheet" href="assets/css/audit.css"><?php endif; ?>
+    <?php if ($activePage === 'decisions'): ?><link rel="stylesheet" href="assets/css/decisions.css"><?php endif; ?>
     <?php if ($activePage === 'audit'): ?><link rel="stylesheet" href="assets/css/audit.css"><?php endif; ?>
 </head>
 <body>
@@ -62,7 +63,7 @@ $icon = static fn(string $name): string => '<svg class="icon" aria-hidden="true"
         <nav class="navigation" aria-label="Điều hướng chính">
         <a class="nav-item<?= $activePage === 'home' ? ' active' : '' ?>" href="index.php?page=home#overview"<?= $activePage === 'home' ? ' aria-current="page"' : '' ?> data-nav-home><?= $icon('grid') ?><span>Tổng quan</span></a>
         <?php foreach ($navigation as [$glyph, $group, $links]): ?>
-            <details class="nav-group"<?= $group === (in_array($activePage, ['accounts', 'audit'], true) ? 'Hệ thống' : (in_array($activePage, ['employees', 'suppliers'], true) ? 'Danh mục' : ($activePage === 'warehouses' ? 'Kho hàng' : 'Hàng hóa'))) ? ' open' : '' ?>>
+            <details class="nav-group"<?= $group === (in_array($activePage, ['accounts', 'audit'], true) ? 'Hệ thống' : (in_array($activePage, ['employees', 'suppliers'], true) ? 'Danh mục' : ($activePage === 'decisions' ? 'Quyết định' : ($activePage === 'warehouses' ? 'Kho hàng' : 'Hàng hóa')))) ? ' open' : '' ?>>
                 <summary class="nav-item"><?= $icon($glyph) ?><span><?= $group ?></span><span class="nav-chevron"><?= $icon('chevron') ?></span></summary>
                 <div class="nav-children">
                 <?php foreach ($links as [$label, $target]): ?>

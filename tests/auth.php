@@ -80,6 +80,7 @@ try {
     check(request('index.php?page=employees')[0] === 303, 'Guests must not access employee management.');
     check(request('index.php?page=warehouses')[0] === 303, 'Guests must not access warehouse management.');
     check(request('index.php?page=suppliers')[0] === 303, 'Guests must not access suppliers.');
+    check(request('index.php?page=decisions')[0] === 303, 'Guests must not access decisions.');
     check(request('index.php?page=audit')[0] === 303, 'Guests must not access audit logs.');
     check(request('index.php', ['username' => $username, 'password' => $password])[0] === 303, 'Missing CSRF token should redirect to login.');
     [$status, $body] = request('index.php?page=home');
@@ -93,6 +94,9 @@ try {
     check(request('index.php?page=employees')[0] === 200, 'Super admin should access employee UI.');
     check(request('index.php?page=warehouses')[0] === 200, 'Super admin should access warehouse UI.');
     check(request('index.php?page=suppliers')[0] === 200, 'Super admin should access suppliers.');
+    check(request('index.php?page=decisions')[0] === 200, 'Super admin should access decisions.');
+    check(request('index.php?page=decisions', ['csrf_token' => $logoutToken])[0] === 422, 'Invalid decision writes must be rejected.');
+    check(request('index.php?page=decision-file&id=1')[0] === 404, 'Missing PDF must return 404.');
     check(request('index.php?page=suppliers', ['csrf_token' => $logoutToken])[0] === 405, 'Suppliers must be read-only.');
     check(request('index.php?page=audit')[0] === 200, 'Super admin should access audit UI.');
     check(request('index.php?page=accounts', ['csrf_token' => $logoutToken])[0] === 422, 'Invalid account writes must be rejected.');
@@ -103,6 +107,7 @@ try {
     check(request('index.php?page=employees')[0] === 403, 'Non-admin users must not access employee management.');
     check(request('index.php?page=warehouses')[0] === 403, 'Non-admin users must not access warehouse management.');
     check(request('index.php?page=suppliers')[0] === 403, 'Non-admin users must not access suppliers.');
+    check(request('index.php?page=decisions')[0] === 403, 'Non-admin users must not access decisions.');
     check(request('index.php?page=warehouses', ['csrf_token' => $logoutToken, 'action' => 'save'])[0] === 403, 'Non-admin users must not change warehouses.');
     check(request('index.php?page=audit')[0] === 403, 'Non-admin users must not access audit logs.');
     $pdo->prepare('UPDATE users SET is_super_admin=1 WHERE id=?')->execute([$userId]);

@@ -5,7 +5,7 @@ require dirname(__DIR__) . '/app/bootstrap.php';
 
 $page = is_string($_GET['page'] ?? null) ? $_GET['page'] : 'login';
 $method = $_SERVER['REQUEST_METHOD'];
-if (!in_array($page, ['login', 'home', 'accounts', 'employees', 'warehouses', 'suppliers', 'audit', 'logout'], true)) {
+if (!in_array($page, ['login', 'home', 'accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'decision-file', 'audit', 'logout'], true)) {
     http_response_code(404);
     exit('Trang không tồn tại.');
 }
@@ -66,7 +66,7 @@ if (isset($_SESSION['user_id'])) {
         exit('Hệ thống tạm thời không khả dụng. Vui lòng thử lại sau.');
     }
 }
-if (in_array($page, ['home', 'accounts', 'employees', 'warehouses', 'suppliers', 'audit'], true)) {
+if (in_array($page, ['home', 'accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'decision-file', 'audit'], true)) {
     if ($user === null) {
         if ($method === 'POST' && $page !== 'home') respondJson(['ok' => false, 'message' => 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.'], 401);
         redirectTo('login');
@@ -78,10 +78,11 @@ if (in_array($page, ['home', 'accounts', 'employees', 'warehouses', 'suppliers',
     }
     if ($page !== 'home' && $method === 'POST') {
         if ($page === 'audit') { header('Allow: GET'); respondJson(['ok' => false, 'message' => 'Nhật ký chỉ được đọc.'], 405); }
+        if ($page === 'decision-file') { header('Allow: GET'); respondJson(['ok' => false, 'message' => 'Chỉ hỗ trợ tải file.'], 405); }
         if ($page === 'suppliers') { header('Allow: GET'); respondJson(['ok' => false, 'message' => 'Thông tin nhà cung cấp được cập nhật từ phiếu nhập kho.'], 405); }
         if (!validCsrfToken()) respondJson(['ok' => false, 'message' => 'Phiên xác nhận không hợp lệ. Hãy tải lại trang.'], 403);
         try {
-            $message = saveManagement(connectDatabase(), $page, (string) $user['id'], $_POST);
+            $message = saveManagement(connectDatabase(), $page, (string) $user['id'], $_POST, $_FILES);
             $_SESSION['management_notice'] = $message;
             respondJson(['ok' => true, 'message' => $message]);
         } catch (DomainException $error) {
@@ -90,6 +91,10 @@ if (in_array($page, ['home', 'accounts', 'employees', 'warehouses', 'suppliers',
             error_log('QLVT management: ' . $error->getMessage());
             respondJson(['ok' => false, 'message' => 'Không thể lưu lúc này. Dữ liệu chưa bị thay đổi. Vui lòng thử lại.'], 503);
         }
+    }
+    if ($page === 'decision-file') {
+        try { downloadDecisionPdf(connectDatabase(), $_GET['id'] ?? null); }
+        catch (Throwable $error) { error_log('QLVT PDF: ' . $error->getMessage()); http_response_code(503); exit('Không thể tải file lúc này.'); }
     }
     if ($page !== 'home') {
         try { $managementData = loadManagement(connectDatabase(), $page); }

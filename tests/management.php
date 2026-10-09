@@ -28,7 +28,21 @@ function httpManagement(string $page, ?array $fields = null): array {
     verify($body !== false, 'Cannot reach XAMPP.');
     foreach ($http_response_header as $header) if (preg_match('/^Set-Cookie: (qlvt_session=[^;]*)/i', $header, $match)) $cookie = $match[1];
     preg_match('/\s(\d{3})\s/', $http_response_header[0], $match);
-    return [(int) $match[1], $body];
+    return [(int) $match[1], $body, $http_response_header];
+}
+function httpDecisionPdf(array $fields, string $pdf, string $name = 'quyet-dinh.pdf'): array {
+    global $base, $cookie;
+    $boundary = 'qlvt-' . bin2hex(random_bytes(12)); $body = '';
+    foreach ($fields as $key => $value) {
+        verify(is_string($value), 'Multipart test fields must be strings.');
+        $body .= "--$boundary\r\nContent-Disposition: form-data; name=\"$key\"\r\n\r\n$value\r\n";
+    }
+    $body .= "--$boundary\r\nContent-Disposition: form-data; name=\"pdf\"; filename=\"$name\"\r\nContent-Type: application/pdf\r\n\r\n$pdf\r\n--$boundary--\r\n";
+    $context = stream_context_create(['http' => ['method' => 'POST', 'header' => "Cookie: $cookie\r\nContent-Type: multipart/form-data; boundary=$boundary\r\n",
+        'content' => $body, 'ignore_errors' => true, 'follow_location' => 0, 'timeout' => 10]]);
+    $response = file_get_contents($base . 'index.php?page=decisions', false, $context);
+    preg_match('/\s(\d{3})\s/', $http_response_header[0], $match);
+    return [(int) $match[1], $response];
 }
 function tokenFrom(string $body): string {
     preg_match('/name="csrf_token" value="([a-f0-9]{64})"/', $body, $match);
@@ -232,9 +246,91 @@ try {
     verify(httpManagement('suppliers', ['csrf_token' => $csrf, 'action' => 'save', 'name' => 'Forbidden'])[0] === 405, 'Supplier tab must not allow direct entry.');
     verify((int) $pdo->query('SELECT COUNT(*) FROM suppliers')->fetchColumn() === 2, 'Supplier read-only POST changed data.');
     rejected(fn() => saveManagement($pdo, 'suppliers', $actorId, ['action' => 'save', 'name' => 'Forbidden']));
+    $pdo->prepare("INSERT INTO decisions (warehouse_id,number,issued_date,decision_type,issuing_authority,content) VALUES (?,?,'2026-10-09','increase','Authority','Content <script>')")->execute([$warehouseIds[0], 'QD <script>']);
+    $decisionId = $pdo->lastInsertId();
+    $pdo->prepare("INSERT INTO decisions (warehouse_id,number,issued_date,decision_type,issuing_authority) VALUES (?,?,'2026-10-08','transfer','Authority')")->execute([$warehouseIds[0], 'Unlinked']);
+    $pdo->exec("INSERT INTO products (code,name,category,unit) VALUES ('decision-test','Product','other','Piece')");
+    $productId = $pdo->lastInsertId();
+    $billId = $pdo->query('SELECT id FROM import_bill ORDER BY id LIMIT 1')->fetchColumn();
+    $pdo->prepare("INSERT INTO import_bill_details (import_bill_id,product_id,received_quantity,product_name,unit,decision_id,decision_status) VALUES (?,?,'12345678901234.123456','Product <script>','Piece',?,'linked')")->execute([$billId, $productId, $decisionId]);
+    $detailId = $pdo->lastInsertId();
+    $pdo->prepare("INSERT INTO export_bill (warehouse_id,number,issued_date,issue_type,reason) VALUES (?,'EXP-TEST','2026-10-09','allocation','Test')")->execute([$warehouseIds[0]]);
+    $exportId = $pdo->lastInsertId();
+    $pdo->prepare("INSERT INTO export_bill_details (export_bill_id,product_id,source_import_detail_id,decision_id,decision_status,issued_quantity,product_name,unit) VALUES (?,?,?,?,'linked',1,'Product','Piece')")->execute([$exportId, $productId, $detailId, $decisionId]);
+    $decisionRecords = loadManagement($pdo, 'decisions')['decisions'];
+    verify($decisionRecords[0]['id'] === $decisionId && $decisionRecords[0]['import_count'] === 1 && $decisionRecords[0]['export_count'] === 1, 'Decision must aggregate both receipt directions.');
+    verify($decisionRecords[0]['items'][0]['quantity'] === '12345678901234.123456' && !$decisionRecords[1]['items'], 'Decision quantity precision or unlinked records incorrect.');
+    [, $body] = httpManagement('decisions');
+    verify(str_contains($body, 'QD &lt;script&gt;') && !str_contains($body, 'QD <script>') && !str_contains($body, 'data-feature="Tăng vật tư"'), 'Decision escaping or simplified navigation incorrect.');
+    verify(httpManagement('decisions', ['action' => 'save'])[0] === 403, 'Decision writes must require CSRF.');
+    $decisionInput = ['csrf_token' => $csrf, 'action' => 'save', 'form_complete' => '1', 'warehouse' => $warehouseIds[0], 'number' => 'CREATED-QD',
+        'issued_date' => '2026-10-09', 'decision_type' => 'increase', 'issuing_authority' => 'Authority <script>', 'content' => 'Test'];
+    verify(httpManagement('decisions', $decisionInput)[0] === 200, 'Decision creation failed.');
+    $newDecisionId = (string) $pdo->query("SELECT id FROM decisions WHERE number='CREATED-QD'")->fetchColumn();
+    rejected(fn() => saveManagement($pdo, 'decisions', $targetId, $decisionInput));
+    verify(httpManagement('decisions', $decisionInput)[0] === 422, 'Duplicate decision accepted.');
+    $invalidDate = $decisionInput; $invalidDate['number'] = 'INVALID'; $invalidDate['issued_date'] = '2026-02-30';
+    verify(httpManagement('decisions', $invalidDate)[0] === 422, 'Invalid date accepted.');
+    $incomplete = $decisionInput; unset($incomplete['form_complete']);
+    verify(httpManagement('decisions', $incomplete)[0] === 422, 'Truncated input accepted.');
+    $pdo->prepare("INSERT INTO import_bill_details (import_bill_id,product_id,received_quantity,product_name,unit) VALUES (?,?,2,'Pending','Piece')")->execute([$billId, $productId]);
+    $pendingId = $pdo->lastInsertId();
+    $pdo->prepare("UPDATE import_bill SET status='confirmed' WHERE id=?")->execute([$billId]);
+    $pendingVersion = $pdo->query("SELECT updated_at FROM import_bill_details WHERE id=$pendingId")->fetchColumn();
+    $currentDecision = decisionSnapshot($pdo, $newDecisionId);
+    $decisionInput += ['id' => $newDecisionId, 'version' => $currentDecision['updated_at'], 'links_version' => decisionLinksVersion($currentDecision['links'])];
+    $otherLinked = $decisionInput; $otherLinked['lines'] = ['import' => [$detailId => $pdo->query("SELECT updated_at FROM import_bill_details WHERE id=$detailId")->fetchColumn()]];
+    verify(httpManagement('decisions', $otherLinked)[0] === 422, 'Existing decision link was overwritten.');
+    $wrongWarehouse = $decisionInput; $wrongWarehouse['warehouse'] = $warehouseIds[1]; $wrongWarehouse['lines'] = ['import' => [$pendingId => $pendingVersion]];
+    verify(httpManagement('decisions', $wrongWarehouse)[0] === 422, 'Cross-warehouse link accepted.');
+    $decisionInput['lines'] = ['import' => [$pendingId => $pendingVersion]];
+    $pdo->prepare("UPDATE import_bill SET status='draft' WHERE id=?")->execute([$billId]);
+    verify(httpManagement('decisions', $decisionInput)[0] === 422, 'Draft receipt linked as newly imported stock.');
+    $pdo->prepare("UPDATE import_bill SET status='confirmed' WHERE id=?")->execute([$billId]);
+    verify(httpManagement('decisions', $decisionInput)[0] === 200, 'Pending import line did not link.');
+    verify(httpManagement('decisions', $decisionInput)[0] === 422, 'Stale decision write accepted.');
+    $currentDecision = decisionSnapshot($pdo, $newDecisionId);
+    verify(isset($currentDecision['links']['import'][$pendingId]), 'Link was not persisted.');
+    $decisionInput['version'] = $currentDecision['updated_at']; $decisionInput['links_version'] = decisionLinksVersion($currentDecision['links']);
+    $pdo->prepare("UPDATE import_bill_details SET note='Concurrent edit',updated_at=updated_at + INTERVAL 1 SECOND WHERE id=?")->execute([$pendingId]);
+    unset($decisionInput['lines']);
+    verify(httpManagement('decisions', $decisionInput)[0] === 422, 'Concurrent line edit was silently unlinked.');
+    $currentDecision = decisionSnapshot($pdo, $newDecisionId);
+    $decisionInput['links_version'] = decisionLinksVersion($currentDecision['links']);
+    verify(httpManagement('decisions', $decisionInput)[0] === 200, 'Unlink failed.');
+    verify($pdo->query("SELECT decision_status FROM import_bill_details WHERE id=$pendingId")->fetchColumn() === 'pending', 'Unlinked line must return to pending.');
+    $currentDecision = decisionSnapshot($pdo, $newDecisionId);
+    $decisionInput['version'] = $currentDecision['updated_at']; $decisionInput['links_version'] = decisionLinksVersion($currentDecision['links']);
+    $pdf = "%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n";
+    verify(httpDecisionPdf($decisionInput, '<?php echo 1; ?>')[0] === 422, 'Fake PDF accepted.');
+    verify(httpDecisionPdf($decisionInput, $pdf, 'payload.php')[0] === 422, 'Non-PDF extension accepted.');
+    verify(httpDecisionPdf($decisionInput, $pdf)[0] === 200, 'PDF upload failed.');
+    $file = $pdo->query("SELECT * FROM attachments WHERE decision_id=$newDecisionId")->fetch();
+    verify($file && is_file($testRoot . '/storage/uploads/' . $file['storage_path']), 'PDF or metadata missing.');
+    [$status, $download, $headers] = httpManagement('decision-file&id=' . $file['id']);
+    verify($status === 200 && $download === $pdf && str_contains(implode(' ', $headers), 'Content-Disposition: attachment'), 'PDF download failed.');
+    $savedCookie = $cookie; $cookie = '';
+    verify(httpManagement('decision-file&id=' . $file['id'])[0] === 303, 'Guest PDF access accepted.'); $cookie = $savedCookie;
+    $pdo->prepare('UPDATE users SET is_super_admin=0 WHERE id=?')->execute([$actorId]);
+    verify(httpManagement('decision-file&id=' . $file['id'])[0] === 403, 'Non-admin PDF access accepted.');
+    $pdo->prepare('UPDATE users SET is_super_admin=1 WHERE id=?')->execute([$actorId]);
+    $pdo->prepare("UPDATE attachments SET storage_path='../.env' WHERE id=?")->execute([$file['id']]);
+    verify(httpManagement('decision-file&id=' . $file['id'])[0] === 404, 'Download path traversal accepted.');
+    $pdo->prepare('UPDATE attachments SET storage_path=? WHERE id=?')->execute([$file['storage_path'], $file['id']]);
+    $currentDecision = decisionSnapshot($pdo, $newDecisionId);
+    $decisionInput['version'] = $currentDecision['updated_at']; $decisionInput['links_version'] = decisionLinksVersion($currentDecision['links']);
+    verify(httpManagement('decisions', $decisionInput)[0] === 200, 'Editing without upload must retain existing PDF.');
+    verify((int) $pdo->query("SELECT COUNT(*) FROM attachments WHERE decision_id=$newDecisionId")->fetchColumn() === 1, 'Edit removed existing PDF.');
     try { $pdo->exec('DELETE FROM audit_logs'); throw new RuntimeException('Immutable audit trigger missing.'); }
     catch (PDOException $error) { verify($error->getCode() === '45000', 'Unexpected audit trigger error.'); }
     $pdo->exec("CREATE TRIGGER test_audit_failure BEFORE INSERT ON audit_logs FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Test audit failure'");
+    $rollbackDecisionInput = $decisionInput;
+    $currentDecision = decisionSnapshot($pdo, $newDecisionId);
+    $rollbackDecisionInput['version'] = $currentDecision['updated_at']; $rollbackDecisionInput['links_version'] = decisionLinksVersion($currentDecision['links']);
+    $rollbackDecisionInput['number'] = 'ROLLBACK-QD';
+    $rollbackDecisionInput['lines[import][' . $pendingId . ']'] = $pdo->query("SELECT updated_at FROM import_bill_details WHERE id=$pendingId")->fetchColumn();
+    verify(httpDecisionPdf($rollbackDecisionInput, $pdf)[0] === 503, 'Audit failure must reject PDF save.');
+    verify(decisionSnapshot($pdo, $newDecisionId) === $currentDecision && count(glob($testRoot . '/storage/uploads/decisions/*.pdf')) === 1, 'Rollback left changed links, metadata or orphan PDF.');
     $current = managementSnapshot($pdo, 'accounts', $targetId);
     try {
         saveManagement($pdo, 'accounts', $actorId, ['action' => 'state', 'id' => $targetId, 'version' => $current['updated_at'], 'status' => 'locked']);
