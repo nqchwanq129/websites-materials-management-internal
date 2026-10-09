@@ -321,10 +321,76 @@ try {
             await evaluate('document.querySelector(".close-employee-dialog").click()');
         }
     }
+    const auditRender = spawnSync(php, ['tests/home.php', '--audit', '--render'], { encoding: 'utf8', windowsHide: true });
+    assert.equal(auditRender.status, 0, auditRender.stderr);
+    await page('Page.navigate', { url: process.env.LOGIN_URL || 'http://localhost/qlvt-remake/public/' });
+    for (let i = 0; i < 100; i++) {
+        if (await evaluate('document.readyState === "complete" && Boolean(document.getElementById("login-form"))')) break;
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    const auditFrame = await page('Page.getFrameTree');
+    await page('Page.setDocumentContent', { frameId: auditFrame.frameTree.frame.id, html: auditRender.stdout });
+    for (let i = 0; i < 100; i++) {
+        if (await evaluate('document.readyState === "complete" && typeof filterAudit === "function"')) break;
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    assert.equal(await evaluate('typeof filterAudit'), 'function');
+    assert.equal(await evaluate('document.querySelectorAll("[data-audit]:not([hidden])").length'), 10);
+    await evaluate('document.getElementById("audit-page-next").click()');
+    assert.equal(await evaluate('document.querySelectorAll("[data-audit]:not([hidden])").length'), 4);
+    await evaluate('document.getElementById("audit-search").value="nguyen"; document.getElementById("audit-search").dispatchEvent(new Event("input"))');
+    assert.equal(await evaluate('document.querySelectorAll("[data-audit]:not([hidden])").length'), 3);
+    assert.equal(await evaluate('document.getElementById("audit-page-label").textContent'), '1 / 1');
+    await evaluate('document.getElementById("audit-reset").click(); document.getElementById("audit-from").value="2026-10-09"; document.getElementById("audit-to").value="2026-10-09"; filterAudit()');
+    assert.equal(await evaluate('document.querySelectorAll("[data-audit]:not([hidden])").length'), 7, 'Date boundaries must be inclusive.');
+    await evaluate('document.getElementById("audit-from").value="2026-10-10"; filterAudit()');
+    assert.equal(await evaluate('document.getElementById("audit-filter-error").hidden'), false);
+    assert.equal(await evaluate('document.querySelectorAll("[data-audit]:not([hidden])").length'), 0);
+    await evaluate('document.getElementById("audit-reset").click(); document.getElementById("audit-entity").value="users"; document.getElementById("audit-action").value="assign_access"; document.getElementById("audit-warehouse").value="global"; filterAudit()');
+    assert.equal(await evaluate('document.querySelectorAll("[data-audit]:not([hidden])").length'), 1);
+    await evaluate('document.getElementById("audit-reset").click(); document.getElementById("audit-warehouse").value="danang"; filterAudit()');
+    assert.equal(await evaluate('document.querySelectorAll("[data-audit]:not([hidden])").length'), 1);
+    await evaluate('document.getElementById("audit-search").value="missing-log"; filterAudit()');
+    assert.equal(await evaluate('document.querySelector(".audit-empty").hidden'), false);
+    await evaluate('document.getElementById("audit-reset").click(); document.querySelectorAll(".audit-details")[3].click()');
+    assert.equal(await evaluate('document.getElementById("audit-dialog").open'), true);
+    assert.equal(await evaluate('document.querySelectorAll("#audit-change-rows .audit-changed").length'), 1, 'Highlight only changed fields.');
+    assert.equal(await evaluate('document.getElementById("audit-detail-id").textContent'), '#1045');
+    await evaluate('document.querySelector("#audit-dialog footer button").click(); document.querySelectorAll(".audit-details")[6].click()');
+    assert.equal(await evaluate('document.querySelector("#audit-change-rows td:nth-child(2)").textContent'), 'Chưa có dữ liệu');
+    assert.equal(await evaluate('document.querySelector("#audit-change-rows tr:last-child td:last-child").textContent'), 'Không', 'Display false values accurately.');
+    await evaluate('document.querySelector("#audit-dialog footer button").click(); openAudit({...JSON.parse(auditRows[0].dataset.audit), description:"<img src=x onerror=alert(1)>", after_data:{note:"<script>alert(1)</script>"}})');
+    assert.equal(await evaluate('document.querySelector("#audit-detail-description img, #audit-change-rows script")'), null, 'Render audit values as text.');
+    await evaluate('document.querySelector("#audit-dialog footer button").click(); document.querySelectorAll(".audit-details")[13].click()');
+    assert.equal(await evaluate('document.getElementById("audit-detail-user").textContent'), 'Hệ thống · Tự động');
+    await evaluate('document.querySelector("#audit-dialog footer button").click()');
+    for (const [width, height] of [[1440, 1000], [1280, 800], [390, 844], [320, 568], [844, 390]]) {
+        await page('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+        await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+        assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, `Audit page overflow at ${width}px.`);
+        const shot = await page('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+        writeFileSync(join(outputDir, `audit-${width}x${height}.png`), Buffer.from(shot.data, 'base64'));
+        await evaluate('document.querySelectorAll(".audit-details")[3].click()');
+        assert.deepEqual(await evaluate(`(() => {
+            const dialog = document.getElementById('audit-dialog');
+            const body = dialog.querySelector('.account-dialog-body');
+            const heading = dialog.querySelector('.account-dialog-heading');
+            const footer = dialog.querySelector('.account-dialog-footer');
+            const before = [heading.getBoundingClientRect().top, footer.getBoundingClientRect().top];
+            body.scrollTop = body.scrollHeight;
+            return { fixed: before[0] === heading.getBoundingClientRect().top && before[1] === footer.getBoundingClientRect().top,
+                fits: dialog.scrollHeight <= dialog.clientHeight + 1 && dialog.scrollWidth <= dialog.clientWidth,
+                actionsVisible: [...footer.querySelectorAll('button'), heading.querySelector('button')].every(button => { const rect = button.getBoundingClientRect(); return rect.top >= 0 && rect.bottom <= innerHeight; }) };
+        })()`), { fixed: true, fits: true, actionsVisible: true }, `Audit detail header/actions must remain visible at ${width}x${height}.`);
+        await evaluate('document.querySelector("#audit-dialog .account-dialog-body").scrollTop=0');
+        const detail = await page('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+        writeFileSync(join(outputDir, `audit-detail-${width}x${height}.png`), Buffer.from(detail.data, 'base64'));
+        await evaluate('document.querySelector("#audit-dialog footer button").click()');
+    }
     assert.deepEqual(pageErrors, [], 'Browser errors.');
     assert.deepEqual(failedRequests, [], 'Asset loading errors.');
     assert.equal(postRequests, 0, 'Dashboard sample controls must not submit business data.');
-    console.log(`PASS: dashboard/sidebar, accounts and employee filters/pagination/forms, preview-only actions and responsive layout.\nScreenshots: ${outputDir}`);
+    console.log(`PASS: dashboard/sidebar, accounts/employees, audit filters/dates/pagination/diffs, preview-only actions and responsive layout.\nScreenshots: ${outputDir}`);
     await send('Browser.close');
 } finally {
     socket?.close();

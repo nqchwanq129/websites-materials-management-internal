@@ -83,6 +83,15 @@ Create/edit and activate/deactivate dialogs are previews only and make no writes
 The route rejects POST requests. Run `php tests/home.php --employees` for a
 database-free rendering check; `node tests/home-ui.mjs` also checks employee UI.
 
+Super admins can open **Hệ thống → Nhật ký thao tác** at `public/index.php?page=audit`.
+This read-only preview contains 14 sample audit events reflecting `audit_logs`:
+actor, warehouse/global scope, action, entity and before/after data. Search,
+inclusive date-range filters, action/entity/warehouse filters and 10-row pagination
+work locally. Details highlight changed fields and display system-generated
+events without a user. No audit records are queried, edited or deleted.
+Run `php tests/home.php --audit` for a database-free rendering check;
+`node tests/home-ui.mjs` also checks audit filters, diffs and responsive dialogs.
+
 Form dialogs keep the title/description and bottom Cancel/Save actions fixed.
 Only the main form body scrolls. Use this same layout for future create/edit
 dialogs, including on short screens and mobile landscape.
