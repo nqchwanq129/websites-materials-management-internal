@@ -5,11 +5,11 @@ function escapeHtml(string $value): string { return htmlspecialchars($value, ENT
 $user = ['username' => 'preview-admin', 'full_name' => 'Quản trị viên <script>', 'is_super_admin' => 1];
 $_SESSION = ['csrf_token' => str_repeat('a', 64)];
 $preview = 'dashboard';
-foreach (['accounts', 'employees', 'warehouses', 'audit'] as $option) {
+foreach (['accounts', 'employees', 'warehouses', 'suppliers', 'audit'] as $option) {
     if (in_array('--' . $option, $argv, true)) $preview = $option;
 }
 $sampleRows = ['dashboard' => ['data-receipt ', 5], 'accounts' => ['data-account="', 6],
-    'employees' => ['data-employee="', 12], 'warehouses' => ['data-warehouse="', 12], 'audit' => ['data-audit="', 14]];
+    'employees' => ['data-employee="', 12], 'warehouses' => ['data-warehouse="', 12], 'suppliers' => ['data-supplier="', 12], 'audit' => ['data-audit="', 14]];
 $previewOnly = true;
 if ($preview !== 'dashboard') require __DIR__ . '/fixtures/' . $preview . '.php';
 ob_start();

@@ -516,10 +516,68 @@ try {
     }
     await new Promise(resolve => setTimeout(resolve, 5000));
     assert.equal(await evaluate('document.querySelectorAll("#notification-center .sn-notify").length'), 0, 'Success notification closes automatically.');
+    const supplierRender = spawnSync(php, ['tests/home.php', '--suppliers', '--render'], { encoding: 'utf8', windowsHide: true });
+    assert.equal(supplierRender.status, 0, supplierRender.stderr);
+    await page('Page.navigate', { url: process.env.LOGIN_URL || 'http://localhost/qlvt-remake/public/' });
+    for (let i = 0; i < 100; i++) {
+        if (await evaluate('document.readyState === "complete" && Boolean(document.getElementById("login-form"))')) break;
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    const supplierFrame = await page('Page.getFrameTree');
+    await page('Page.setDocumentContent', { frameId: supplierFrame.frameTree.frame.id, html: supplierRender.stdout });
+    for (let i = 0; i < 100; i++) {
+        if (await evaluate('document.readyState === "complete" && typeof filterSuppliers === "function"')) break;
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    assert.equal(await evaluate('document.querySelectorAll("[data-supplier]:not([hidden])").length'), 10);
+    assert.equal(await evaluate('document.querySelectorAll("[data-delete-record], #create-supplier, #supplier-form").length'), 0, 'Supplier tab is for lookup, not entry.');
+    await evaluate('nextSupplierPage.click()');
+    assert.equal(await evaluate('document.querySelectorAll("[data-supplier]:not([hidden])").length'), 2);
+    for (const [filter, value, count] of [['supplierStatus', 'inactive', 3], ['supplierTax', 'missing', 3], ['supplierLinked', 'unlinked', 4]]) {
+        await evaluate(`supplierStatus.value=''; supplierTax.value=''; supplierLinked.value=''; ${filter}.value='${value}'; filterSuppliers()`);
+        assert.equal(await evaluate('document.querySelectorAll("[data-supplier]:not([hidden])").length'), count);
+        assert.equal(await evaluate('document.getElementById("supplier-page-label").textContent'), '1 / 1');
+    }
+    await evaluate('supplierLinked.value=""; supplierSearch.value="0100000001"; filterSuppliers()');
+    assert.equal(await evaluate('document.querySelectorAll("[data-supplier]:not([hidden])").length'), 1, 'Tax-code search preserves leading zeros.');
+    await evaluate('supplierSearch.value="thiet bi"; filterSuppliers()');
+    assert.equal(await evaluate('document.getElementById("supplier-count").textContent.endsWith("/ 12 nhà cung cấp")'), true);
+    await evaluate('supplierSearch.value="missing-supplier"; filterSuppliers()');
+    assert.equal(await evaluate('document.querySelector(".supplier-empty").hidden'), false);
+    await evaluate('supplierSearch.value=""; filterSuppliers(); document.querySelectorAll(".supplier-details")[2].click()');
+    assert.equal(await evaluate('document.getElementById("supplier-receipt-empty").hidden'), false);
+    await evaluate('supplierDialog.close(); const maliciousSupplier=JSON.parse(supplierRows[0].dataset.supplier); maliciousSupplier.name="<img src=x onerror=alert(1)>"; openSupplier(maliciousSupplier)');
+    assert.equal(await evaluate('document.getElementById("supplier-detail-name").querySelector("img") === null'), true, 'Supplier detail names are plain text.');
+    await evaluate('supplierDialog.close()');
+    for (const [width, height] of [[1440, 1000], [1280, 800], [390, 844], [320, 568], [844, 390]]) {
+        await page('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+        await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+        assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, `Supplier page overflow at ${width}px.`);
+        const shot = await page('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+        writeFileSync(join(outputDir, `suppliers-${width}x${height}.png`), Buffer.from(shot.data, 'base64'));
+        await evaluate('document.querySelector(".supplier-details").click()');
+        assert.equal(await evaluate('document.querySelectorAll("#supplier-receipt-rows tr").length'), 14);
+        assert.equal(await evaluate('document.getElementById("supplier-detail-tax_code").textContent'), '0100000001');
+        assert.deepEqual(await evaluate(`(() => {
+            const dialog = supplierDialog;
+            const body = dialog.querySelector('.account-dialog-body');
+            const heading = dialog.querySelector('.account-dialog-heading');
+            const footer = dialog.querySelector('.account-dialog-footer');
+            const before = [heading.getBoundingClientRect().top, footer.getBoundingClientRect().top];
+            body.scrollTop = body.scrollHeight;
+            return { fixed: before[0] === heading.getBoundingClientRect().top && before[1] === footer.getBoundingClientRect().top,
+                fits: dialog.scrollHeight <= dialog.clientHeight + 1 && dialog.scrollWidth <= dialog.clientWidth,
+                actionsVisible: [...footer.querySelectorAll('button'), heading.querySelector('button')].every(button => { const rect=button.getBoundingClientRect(); return rect.top>=0 && rect.bottom<=innerHeight; }) };
+        })()`), { fixed: true, fits: true, actionsVisible: true }, `Supplier detail title/actions must remain visible at ${width}x${height}.`);
+        await evaluate('supplierDialog.querySelector(".account-dialog-body").scrollTop=0');
+        const detail = await page('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+        writeFileSync(join(outputDir, `supplier-detail-${width}x${height}.png`), Buffer.from(detail.data, 'base64'));
+        await evaluate('supplierDialog.querySelector("footer button").click()');
+    }
     assert.deepEqual(pageErrors, [], 'Browser errors.');
     assert.deepEqual(failedRequests, [], 'Asset loading errors.');
     assert.equal(postRequests, 0, 'Dashboard sample controls must not submit business data.');
-    console.log(`PASS: dashboard/sidebar, accounts/employees/warehouses, audit filters/dates/pagination/diffs, preview-only actions and responsive layout.\nScreenshots: ${outputDir}`);
+    console.log(`PASS: dashboard/sidebar, accounts/employees/warehouses, read-only suppliers, audit filters/dates/pagination/diffs, notifications and responsive layout.\nScreenshots: ${outputDir}`);
     await send('Browser.close');
 } finally {
     socket?.close();

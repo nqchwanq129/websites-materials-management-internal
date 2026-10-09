@@ -134,6 +134,18 @@ already have audit history and should normally be deactivated instead of deleted
 Successful deletions retain their before snapshot in the immutable audit log;
 if audit insertion fails, the deletion rolls back. Tests use the isolated DB.
 
+Super admins can open **Danh mục → Nhà cung cấp** at
+`public/index.php?page=suppliers`. This read-only page queries `suppliers` and
+linked `import_bill` records, with contact/tax details, counts, latest receipt date,
+search, status/tax-code/link filters and 10-row pagination. The detail dialog shows
+linked receipt numbers, dates, warehouses, invoices and draft/confirmed/cancelled
+statuses. POSTs are rejected; this tab does not create or edit supplier records.
+Supplier entry belongs to the import-receipt workflow, primarily from invoice XML;
+implement supplier synchronization/deduplication there when receipt creation is
+built. That XML workflow is not implemented yet. Production reads never create
+placeholder suppliers. Run `php tests/home.php --suppliers` for fixture rendering;
+the management and browser checks cover real data and the read-only UI.
+
 Form dialogs keep the title/description and bottom Cancel/Save actions fixed.
 Dashboard notifications use Simple Notify 1.0.6 (MIT), vendored under
 `public/assets/vendor/simple-notify/`; no CDN is needed at runtime. Successful

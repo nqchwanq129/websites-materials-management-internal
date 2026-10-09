@@ -216,6 +216,22 @@ try {
     $pdo->prepare('INSERT INTO employees (code,full_name,warehouse_id,created_by) VALUES (?,?,?,?)')->execute([$prefix . '-rollback', 'Rollback deletion', $warehouseIds[0], $actorId]);
     $rollbackEmployeeId = $pdo->lastInsertId();
     $rollbackEmployee = managementSnapshot($pdo, 'employees', $rollbackEmployeeId);
+    $pdo->prepare('INSERT INTO suppliers (name,tax_code,created_by) VALUES (?,?,?)')->execute(['Supplier <script>', '0012345678', $actorId]);
+    $supplierId = $pdo->lastInsertId();
+    $pdo->prepare('INSERT INTO suppliers (name,created_by) VALUES (?,?)')->execute(['Unlinked supplier', $actorId]);
+    foreach (['draft', 'confirmed', 'cancelled'] as $supplierBillStatus) {
+        $pdo->prepare("INSERT INTO import_bill (warehouse_id,number,received_date,receipt_type,supplier_id,supplier_name,invoice_number,status,cancel_reason,created_by)
+            VALUES (?,?,'2026-10-09','purchase',?,?,'001',?,?,?)")->execute([$warehouseIds[0], $prefix . '-' . $supplierBillStatus, $supplierId, 'Supplier <script>', $supplierBillStatus, $supplierBillStatus === 'cancelled' ? 'Test cancellation' : null, $actorId]);
+    }
+    $supplierRecords = loadManagement($pdo, 'suppliers')['suppliers'];
+    $supplierRecord = array_values(array_filter($supplierRecords, fn($s) => $s['id'] === $supplierId))[0];
+    verify($supplierRecord['tax_code'] === '0012345678' && $supplierRecord['receipt_count'] === 3 && $supplierRecord['last_received_date'] === '2026-10-09', 'Supplier identity/receipt aggregation incorrect.');
+    verify(count($supplierRecords[0]['receipts']) === 0 && $supplierRecords[0]['phone'] === '', 'Unlinked supplier must not inherit another supplier invoices.');
+    [, $body] = httpManagement('suppliers');
+    verify(str_contains($body, 'Supplier &lt;script&gt;') && !str_contains($body, 'Supplier <script>') && str_contains($body, '0012345678'), 'Supplier UI must preserve tax code and escape names.');
+    verify(httpManagement('suppliers', ['csrf_token' => $csrf, 'action' => 'save', 'name' => 'Forbidden'])[0] === 405, 'Supplier tab must not allow direct entry.');
+    verify((int) $pdo->query('SELECT COUNT(*) FROM suppliers')->fetchColumn() === 2, 'Supplier read-only POST changed data.');
+    rejected(fn() => saveManagement($pdo, 'suppliers', $actorId, ['action' => 'save', 'name' => 'Forbidden']));
     try { $pdo->exec('DELETE FROM audit_logs'); throw new RuntimeException('Immutable audit trigger missing.'); }
     catch (PDOException $error) { verify($error->getCode() === '45000', 'Unexpected audit trigger error.'); }
     $pdo->exec("CREATE TRIGGER test_audit_failure BEFORE INSERT ON audit_logs FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Test audit failure'");

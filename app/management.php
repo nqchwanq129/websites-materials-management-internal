@@ -249,6 +249,22 @@ function loadManagement(PDO $pdo, string $page): array
             (SELECT COUNT(*) FROM user_warehouses uw WHERE uw.warehouse_id=w.id) AS access_count
             FROM warehouses w ORDER BY w.id DESC")->fetchAll();
         foreach ($data['warehouseRecords'] as &$row) { $row['id'] = (string) $row['id']; $row['address'] ??= ''; } unset($row);
+    } elseif ($page === 'suppliers') {
+        $receipts = [];
+        foreach ($pdo->query('SELECT b.id,b.supplier_id,b.number,b.received_date,b.invoice_number,b.status,w.name AS warehouse_name
+            FROM import_bill b JOIN warehouses w ON w.id=b.warehouse_id WHERE b.supplier_id IS NOT NULL ORDER BY b.received_date DESC,b.id DESC') as $bill) {
+            $receipts[$bill['supplier_id']][] = ['id' => (string) $bill['id'], 'number' => $bill['number'], 'received_date' => $bill['received_date'],
+                'invoice_number' => $bill['invoice_number'] ?? '', 'status' => $bill['status'], 'warehouse_name' => $bill['warehouse_name']];
+        }
+        $data['suppliers'] = [];
+        foreach ($pdo->query('SELECT id,name,tax_code,address,phone,email,status,created_at,updated_at FROM suppliers ORDER BY id DESC') as $row) {
+            $row['id'] = (string) $row['id'];
+            foreach (['tax_code', 'address', 'phone', 'email'] as $key) $row[$key] ??= '';
+            $row['receipts'] = $receipts[$row['id']] ?? [];
+            $row['receipt_count'] = count($row['receipts']);
+            $row['last_received_date'] = $row['receipts'][0]['received_date'] ?? '';
+            $data['suppliers'][] = $row;
+        }
     } elseif ($page === 'audit') {
         $data['logs'] = [];
         foreach ($pdo->query('SELECT a.*,u.username,e.full_name,w.name AS warehouse_name FROM audit_logs a
