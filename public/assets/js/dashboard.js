@@ -60,7 +60,7 @@ navigationSearch.addEventListener('input', () => {
     sidebar.querySelector('.nav-empty').hidden = matches !== 0;
 });
 document.addEventListener('keydown', event => {
-    if (!(event.ctrlKey || event.metaKey) || event.code !== 'Slash' || featureDialog.open) return;
+    if (!(event.ctrlKey || event.metaKey) || event.code !== 'Slash' || document.querySelector('dialog[open]')) return;
     event.preventDefault();
     if (mobile.matches && sidebar.inert) setMenu(true);
     navigationSearch.focus();
@@ -83,5 +83,7 @@ tabs.forEach(tab => tab.addEventListener('click', () => {
     tabs.forEach(item => { item.classList.toggle('active', item === tab); item.setAttribute('aria-pressed', String(item === tab)); });
     filterReceipts();
 }));
-search.addEventListener('input', filterReceipts);
-warehouse.addEventListener('change', filterReceipts);
+if (search && warehouse) {
+    search.addEventListener('input', filterReceipts);
+    warehouse.addEventListener('change', filterReceipts);
+}

@@ -149,10 +149,113 @@ try {
         const { data } = await page('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
         writeFileSync(join(outputDir, `home-${width}x${height}.png`), Buffer.from(data, 'base64'));
     }
+    // Render account UI in a fresh document; no sample accounts are inserted in the database.
+    const accountRender = spawnSync(php, ['tests/home.php', '--accounts', '--render'], { encoding: 'utf8', windowsHide: true });
+    assert.equal(accountRender.status, 0, accountRender.stderr);
+    await page('Page.navigate', { url: process.env.LOGIN_URL || 'http://localhost/qlvt-remake/public/' });
+    for (let i = 0; i < 100; i++) {
+        if (await evaluate('document.readyState === "complete" && Boolean(document.getElementById("login-form"))')) break;
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    const accountFrame = await page('Page.getFrameTree');
+    await page('Page.setDocumentContent', { frameId: accountFrame.frameTree.frame.id, html: accountRender.stdout });
+    for (let i = 0; i < 100; i++) {
+        if (await evaluate('document.readyState === "complete" && typeof filterAccounts === "function"')) break;
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    assert.equal(await evaluate('typeof filterAccounts'), 'function', 'Account page scripts failed.');
+    assert.equal(await evaluate('document.querySelectorAll("[data-account]:not([hidden])").length'), 6);
+    await evaluate('document.getElementById("account-search").value="nguyen"; document.getElementById("account-search").dispatchEvent(new Event("input"))');
+    assert.equal(await evaluate('document.querySelectorAll("[data-account]:not([hidden])").length'), 1);
+    await evaluate('document.getElementById("account-search").value=""; document.getElementById("account-role").value="keeper"; document.getElementById("account-warehouse").value="haiphong"; filterAccounts()');
+    assert.equal(await evaluate('document.querySelectorAll("[data-account]:not([hidden])").length'), 1, 'Role and warehouse must match the same assignment.');
+    await evaluate('document.getElementById("account-role").value=""; document.getElementById("account-warehouse").value=""; document.getElementById("account-status").value="locked"; filterAccounts()');
+    assert.equal(await evaluate('document.querySelectorAll("[data-account]:not([hidden])").length'), 1);
+    await evaluate('document.getElementById("account-search").value="missing-user"; filterAccounts()');
+    assert.equal(await evaluate('document.querySelector(".account-empty").hidden'), false);
+    await evaluate('document.getElementById("account-search").value=""; document.getElementById("account-status").value=""; filterAccounts()');
+    assert.equal(await evaluate('document.querySelector(".account-tabs, #permissions-panel")'), null, 'Account list should display directly without role tabs.');
+    await evaluate('document.getElementById("create-account").focus(); document.getElementById("create-account").click()');
+    assert.equal(await evaluate('document.getElementById("account-dialog").open'), true);
+    assert.equal(await evaluate('document.getElementById("account-form").checkValidity()'), false);
+    await evaluate('document.getElementById("account-admin").checked=true; document.getElementById("account-admin").dispatchEvent(new Event("change"))');
+    assert.equal(await evaluate('document.getElementById("warehouse-permissions").disabled'), true);
+    await evaluate('document.getElementById("account-username").value="sample-user"; document.getElementById("account-password").value="sample-only-password"; document.getElementById("account-form").requestSubmit()');
+    assert.equal(await evaluate('document.getElementById("account-dialog").open'), false);
+    assert.equal(await evaluate('document.getElementById("account-notice").hidden'), false);
+    assert.equal(await evaluate('document.getElementById("account-password").value'), '', 'Do not retain the entered password.');
+    assert.equal(await evaluate('document.querySelectorAll("[data-account]").length'), 6, 'Preview must not change sample accounts.');
+    await evaluate('document.querySelectorAll(".edit-account")[1].click()');
+    assert.equal(await evaluate('document.getElementById("account-username").value'), 'minhanh');
+    assert.equal(await evaluate('document.querySelector("[data-warehouse-role=haiphong]").value'), 'viewer');
+    assert.equal(await evaluate('document.getElementById("account-password").disabled'), true);
+    await evaluate('document.querySelector(".close-account-dialog").click(); document.querySelector(".account-state-preview").click()');
+    assert.equal(await evaluate('document.getElementById("account-state-dialog").open'), true);
+    await evaluate('document.querySelector("#account-state-dialog button[value=cancel]").click()');
+    for (const [width, height] of [[1440, 1000], [1280, 800], [390, 844], [320, 568], [844, 390]]) {
+        await page('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+        await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+        assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, `Account page overflow at ${width}px.`);
+        const { data } = await page('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+        writeFileSync(join(outputDir, `accounts-${width}x${height}.png`), Buffer.from(data, 'base64'));
+        await evaluate('document.getElementById("create-account").click()');
+        assert.equal(await evaluate('document.getElementById("account-dialog").scrollWidth <= document.getElementById("account-dialog").clientWidth'), true, `Account form overflow at ${width}px.`);
+        const shot = await page('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+        writeFileSync(join(outputDir, `account-form-${width}x${height}.png`), Buffer.from(shot.data, 'base64'));
+        for (const editing of [false, true]) {
+            if (editing) {
+                await evaluate('document.querySelector(".close-account-dialog").click(); document.querySelectorAll(".edit-account")[1].click()');
+            }
+            assert.deepEqual(await evaluate(`(() => {
+                const dialog = document.getElementById('account-dialog');
+                const body = dialog.querySelector('.account-dialog-body');
+                const heading = dialog.querySelector('.account-dialog-heading');
+                const footer = dialog.querySelector('.account-dialog-footer');
+                const before = [heading.getBoundingClientRect().top, footer.getBoundingClientRect().top];
+                body.scrollTop = body.scrollHeight;
+                const controls = [...footer.querySelectorAll('button'), heading.querySelector('button')];
+                return {
+                    fixed: before[0] === heading.getBoundingClientRect().top && before[1] === footer.getBoundingClientRect().top,
+                    dialogFits: dialog.scrollHeight <= dialog.clientHeight + 1,
+                    bodyScrollable: body.scrollHeight <= body.clientHeight || body.scrollTop > 0,
+                    actionsVisible: controls.every(button => { const rect = button.getBoundingClientRect(); return rect.top >= 0 && rect.bottom <= innerHeight; })
+                };
+            })()`), { fixed: true, dialogFits: true, bodyScrollable: true, actionsVisible: true }, `Only form content should scroll at ${width}x${height}, editing=${editing}.`);
+        }
+        await evaluate('document.querySelector(".close-account-dialog").click()');
+    }
+    await evaluate(`(() => {
+        for (let i = 0; i < 17; i++) {
+            const row = accountRows[0].cloneNode(true);
+            const account = JSON.parse(row.dataset.account);
+            account.username = 'pagination-user-' + i;
+            row.dataset.account = JSON.stringify(account);
+            row.querySelector('.account-identity strong').textContent = account.username;
+            document.querySelector('.accounts-table tbody').append(row);
+            accountRows.push(row);
+        }
+        filterAccounts();
+    })()`);
+    assert.equal(await evaluate('document.querySelectorAll("[data-account]:not([hidden])").length'), 10, 'Limit each page to 10 accounts.');
+    await evaluate('document.getElementById("account-page-next").click()');
+    assert.equal(await evaluate('document.querySelectorAll("[data-account]:not([hidden])").length'), 10);
+    await evaluate('document.getElementById("account-page-next").click()');
+    assert.equal(await evaluate('document.querySelectorAll("[data-account]:not([hidden])").length'), 3);
+    assert.equal(await evaluate('document.getElementById("account-page-next").disabled'), true);
+    await evaluate('document.getElementById("account-page-previous").click()');
+    assert.equal(await evaluate('document.getElementById("account-page-label").textContent'), '2 / 3');
+    await evaluate('document.getElementById("account-search").value="pagination-user"; document.getElementById("account-search").dispatchEvent(new Event("input"))');
+    assert.equal(await evaluate('document.getElementById("account-page-label").textContent'), '1 / 2', 'Search resets pagination.');
+    await evaluate('document.getElementById("account-page-next").click()');
+    assert.equal(await evaluate('document.querySelectorAll("[data-account]:not([hidden])").length'), 7, 'Paginate matching accounts only.');
+    await evaluate('document.getElementById("account-search").value="missing-user"; document.getElementById("account-search").dispatchEvent(new Event("input"))');
+    assert.equal(await evaluate('document.getElementById("account-page-previous").disabled && document.getElementById("account-page-next").disabled'), true);
+    assert.equal(await evaluate('document.querySelector(".account-empty").hidden'), false);
+    await evaluate('accountRows.splice(6).forEach(row=>row.remove()); document.getElementById("account-search").value=""; filterAccounts()');
     assert.deepEqual(pageErrors, [], 'Browser errors.');
     assert.deepEqual(failedRequests, [], 'Asset loading errors.');
     assert.equal(postRequests, 0, 'Dashboard sample controls must not submit business data.');
-    console.log(`PASS: dashboard filters, sidebar search, collapsible menus, shortcut, fixed sidebar sections, dialogs and responsive layout.\nScreenshots: ${outputDir}`);
+    console.log(`PASS: dashboard/sidebar, account filters, per-warehouse roles, account forms, preview-only actions and responsive layout.\nScreenshots: ${outputDir}`);
     await send('Browser.close');
 } finally {
     socket?.close();

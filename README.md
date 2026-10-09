@@ -59,5 +59,24 @@ Use `php tests/home.php` to check dashboard rendering without a database, and
 navigation and responsive layouts. The browser check renders a test account
 directly in its browser session; it does not create database records.
 
+Super admins can open **Hệ thống → Tài khoản & phân quyền** at
+`public/index.php?page=accounts`. This is a UI preview with sample accounts,
+employee links, active/locked states, a global super-admin option and individual
+keeper/viewer roles for each warehouse. Create/edit and lock/unlock dialogs do
+not send or save account data. The account list displays directly; permissions
+are configured inside the create/edit form. Business authorization will be
+implemented separately. Account routes require
+a signed-in super admin and reject POST requests. Dashboard pages share the
+sidebar/header/footer templates under `resources/views/layouts/`.
+Use `php tests/home.php --accounts` to render-check the account UI without a DB.
+The browser check also covers account filters, forms and warehouse role selection.
+
+Account lists show at most **10 accounts per page**. Searching or changing a
+filter resets to the first page; pagination applies to the matching accounts.
+
+Form dialogs keep the title/description and bottom Cancel/Save actions fixed.
+Only the main form body scrolls. Use this same layout for future create/edit
+dialogs, including on short screens and mobile landscape.
+
 The existing `reference_source/` directory is kept locally as a reference
 and is not part of the project history.
