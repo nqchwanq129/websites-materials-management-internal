@@ -68,7 +68,7 @@ if (isset($_SESSION['user_id'])) {
 }
 if ($page === 'home') {
     if ($user === null) redirectTo('login');
-    require dirname(__DIR__) . '/resources/views/auth/signed-in.php';
+    require dirname(__DIR__) . '/resources/views/dashboard/home.php';
     exit;
 }
 if ($user !== null) redirectTo('home');

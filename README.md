@@ -30,8 +30,12 @@ connects to `qlvt-new` on `127.0.0.1:3306`. PDO and native PHP password/session
 APIs handle authentication; no additional dependency is required yet.
 
 Login uses `users.password_hash`, the active user status and employee status
-when an employee is assigned. Successful login opens a protected confirmation
-page; the warehouse dashboard will be implemented separately. Sessions expire
+when an employee is assigned. Successful login opens the protected dashboard.
+The dashboard currently uses clearly labeled sample business data and makes no
+business database queries. Its menus reflect the reference app and new schema:
+products, import/export receipts, warehouses, decisions, suppliers, employees,
+accounts and audit logs. Receipt search and warehouse/type filters work locally;
+unimplemented actions open an explanatory dialog. Sessions expire
 after 30 minutes of inactivity. CSRF tokens protect login/logout, and 10 failed
 attempts from an IP address block further attempts for the current 5-minute window.
 
@@ -49,6 +53,11 @@ With XAMPP running, use `node tests/login-ui.mjs` to check the interface in
 Chrome/Edge (Node 22+). Screenshots are saved to a temporary directory.
 Use `php tests/auth.php` for backend checks. This check creates a temporary test
 account and deletes it afterwards; it does not modify the existing admin account.
+
+Use `php tests/home.php` to check dashboard rendering without a database, and
+`node tests/home-ui.mjs` to check sample receipt filters, search, dialogs, mobile
+navigation and responsive layouts. The browser check renders a test account
+directly in its browser session; it does not create database records.
 
 The existing `reference_source/` directory is kept locally as a reference
 and is not part of the project history.

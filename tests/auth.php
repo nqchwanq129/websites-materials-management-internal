@@ -82,7 +82,7 @@ try {
     request('index.php', ['username' => $username, 'password' => $password, 'csrf_token' => $token]);
     check($cookie !== $beforeLogin, 'Successful login must rotate the session ID.');
     [$status, $body] = request('index.php?page=home');
-    check($status === 200 && str_contains($body, 'Đăng nhập thành công') && !str_contains($body, $password), 'Protected page did not authenticate correctly.');
+    check($status === 200 && str_contains($body, 'TỔNG QUAN HOẠT ĐỘNG') && str_contains($body, $username) && !str_contains($body, $password), 'Protected dashboard did not authenticate correctly.');
     $logoutToken = csrf($body);
     check(request('index.php?page=logout')[0] === 403, 'GET must not log out.');
     check(request('index.php?page=logout', ['csrf_token' => 'invalid'])[0] === 403, 'Invalid CSRF must not log out.');
