@@ -82,6 +82,8 @@ try {
     check(request('index.php?page=suppliers')[0] === 303, 'Guests must not access suppliers.');
     check(request('index.php?page=decisions')[0] === 303, 'Guests must not access decisions.');
     check(request('index.php?page=reports')[0] === 303, 'Guests must not access reports.');
+    check(request('index.php?page=products')[0] === 303, 'Guests must not access products.');
+    foreach (['materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products'] as $route) check(request('index.php?page=' . $route)[0] === 303, 'Guests must not access category pages.');
     check(request('index.php?page=audit')[0] === 303, 'Guests must not access audit logs.');
     check(request('index.php', ['username' => $username, 'password' => $password])[0] === 303, 'Missing CSRF token should redirect to login.');
     [$status, $body] = request('index.php?page=home');
@@ -96,6 +98,9 @@ try {
     check(request('index.php?page=warehouses')[0] === 200, 'Super admin should access warehouse UI.');
     check(request('index.php?page=suppliers')[0] === 200, 'Super admin should access suppliers.');
     check(request('index.php?page=decisions')[0] === 200, 'Super admin should access decisions.');
+    check(request('index.php?page=products')[0] === 200, 'Admin should access products.');
+    foreach (['materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products'] as $route) check(request('index.php?page=' . $route)[0] === 200, 'Admin should access category pages.');
+    check(request('index.php?page=products', ['csrf_token' => $logoutToken])[0] === 422, 'Invalid product edit must fail.');
     foreach (['inventory', 'materials', 'parts', 'tools', 'assets'] as $kind) {
         [$reportStatus, $reportBody] = request('index.php?page=reports&kind=' . $kind);
         check($reportStatus === 200 && str_contains($reportBody, 'Dữ liệu mẫu') && str_contains($reportBody, 'data-report-row'), 'Report sample route failed.');
@@ -115,6 +120,8 @@ try {
     check(request('index.php?page=suppliers')[0] === 403, 'Non-admin users must not access suppliers.');
     check(request('index.php?page=decisions')[0] === 403, 'Non-admin users must not access decisions.');
     check(request('index.php?page=reports')[0] === 403, 'Non-admin report access must be blocked.');
+    check(request('index.php?page=products')[0] === 403, 'Non-admin product access must be blocked.');
+    foreach (['materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products'] as $route) check(request('index.php?page=' . $route)[0] === 403, 'Non-admin category access must be blocked.');
     check(request('index.php?page=warehouses', ['csrf_token' => $logoutToken, 'action' => 'save'])[0] === 403, 'Non-admin users must not change warehouses.');
     check(request('index.php?page=audit')[0] === 403, 'Non-admin users must not access audit logs.');
     $pdo->prepare('UPDATE users SET is_super_admin=1 WHERE id=?')->execute([$userId]);

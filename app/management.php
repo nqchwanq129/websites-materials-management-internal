@@ -1,6 +1,7 @@
 <?php
 declare(strict_types=1);
 require_once __DIR__ . '/decisions.php';
+require_once __DIR__ . '/products.php';
 
 function managementText(array $input, string $key, int $max, bool $required = false): string
 {
@@ -48,6 +49,7 @@ function managementSnapshot(PDO $pdo, string $page, string $id): ?array
 function saveManagement(PDO $pdo, string $page, string $actorId, array $input, array $files = []): string
 {
     if ($page === 'decisions') return saveDecision($pdo, $actorId, $input, $files);
+    if (array_key_exists($page, productPages())) return saveProduct($pdo, $actorId, $input, productPages()[$page]);
     if (!in_array($page, ['accounts', 'employees', 'warehouses'], true)) throw new DomainException('Không được thay đổi nhật ký.');
     $action = managementText($input, 'action', 20, true);
     if (!in_array($action, ['save', 'state', 'delete'], true) || ($action === 'delete' && $page === 'accounts')) throw new DomainException('Thao tác không hợp lệ.');
@@ -221,7 +223,9 @@ function loadManagement(PDO $pdo, string $page): array
         $data['warehouseStatuses'][(string) $row['id']] = $row['status'];
     }
     // ponytail: client-side filtering loads complete lists; move filters/pagination to SQL when data volume grows.
-    if ($page === 'accounts') {
+    if (array_key_exists($page, productPages())) {
+        $data['products'] = loadProducts($pdo, productPages()[$page]);
+    } elseif ($page === 'accounts') {
         $data['employees'] = $data['employeeOptions'] = [];
         foreach ($pdo->query('SELECT id,code,full_name FROM employees ORDER BY full_name,id') as $row) {
             $data['employees'][(string) $row['id']] = $row['full_name'];

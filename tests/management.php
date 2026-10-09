@@ -321,9 +321,73 @@ try {
     $decisionInput['version'] = $currentDecision['updated_at']; $decisionInput['links_version'] = decisionLinksVersion($currentDecision['links']);
     verify(httpManagement('decisions', $decisionInput)[0] === 200, 'Editing without upload must retain existing PDF.');
     verify((int) $pdo->query("SELECT COUNT(*) FROM attachments WHERE decision_id=$newDecisionId")->fetchColumn() === 1, 'Edit removed existing PDF.');
+    $pdo->prepare("UPDATE export_bill SET status='confirmed' WHERE id=?")->execute([$exportId]);
+    $pdo->prepare("INSERT INTO import_bill (warehouse_id,number,received_date,receipt_type,status) VALUES (?,'PRODUCT-DRAFT','2026-10-09','purchase','draft')")->execute([$warehouseIds[0]]);
+    $draftBillId = $pdo->lastInsertId();
+    $pdo->prepare("INSERT INTO import_bill_details (import_bill_id,product_id,received_quantity,product_name,unit) VALUES (?,?,999,'Product','Piece')")->execute([$draftBillId, $productId]);
+    $pdo->prepare("INSERT INTO import_bill (warehouse_id,number,received_date,receipt_type,status) VALUES (?,'PRODUCT-SECOND','2026-10-09','purchase','confirmed')")->execute([$warehouseIds[1]]);
+    $secondBillId = $pdo->lastInsertId();
+    $pdo->prepare("INSERT INTO import_bill_details (import_bill_id,product_id,received_quantity,product_name,unit) VALUES (?,?,3,'Product','Piece')")->execute([$secondBillId, $productId]);
+    $records = loadManagement($pdo, 'products')['products']; $product = $records[0];
+    verify($product['incoming'] === '12345678901239.123456' && $product['outgoing'] === '1.000000' && $product['closing'] === '12345678901238.123456', 'Product stock must retain DECIMAL precision and exclude drafts without join multiplication.');
+    verify(count($product['stocks']) === 2 && count($product['movements']) === 5, 'Product warehouse balance/history incorrect.');
+    $productInput = ['csrf_token' => $csrf, 'action' => 'save', 'id' => $productId, 'version' => $product['version'], 'code' => $product['code'], 'name' => 'Product <script>',
+        'category' => 'other', 'unit' => 'Piece', 'tracking_mode' => 'quantity', 'status' => 'inactive', 'specifications' => 'Updated specification'];
+    verify(httpManagement('products', array_diff_key($productInput, ['csrf_token' => true]))[0] === 403, 'Product CSRF bypass.');
+    rejected(fn() => saveManagement($pdo, 'products', $targetId, $productInput));
+    $badProduct = $productInput; $badProduct['unit'] = 'Box';
+    verify(httpManagement('products', $badProduct)[0] === 422, 'Changing units with history accepted.');
+    $badProduct = $productInput; $badProduct['tracking_mode'] = 'none';
+    verify(httpManagement('products', $badProduct)[0] === 422, 'Changing tracking with history accepted.');
+    verify(httpManagement('products', $productInput)[0] === 200, 'Product edit failed.');
+    verify(httpManagement('products', $productInput)[0] === 422, 'Stale product edit accepted.');
+    [, $body] = httpManagement('products');
+    verify(str_contains($body, 'Product &lt;script&gt;') && !str_contains($body, 'Product <script>'), 'Product name must be escaped.');
+    [, $categoryBody] = httpManagement('other-products');
+    verify(str_contains($categoryBody, 'id="products-list" data-category="other"') && !str_contains($categoryBody, 'class="product-groups"'), 'Sidebar category must reach product filtering without duplicate cards.');
+    verify(loadManagement($pdo, 'materials')['products'] === [], 'Category page must exclude products from other categories.');
+    $wrongCategory = $productInput;
+    $wrongCategory['version'] = loadManagement($pdo, 'products')['products'][0]['version'];
+    verify(httpManagement('materials', $wrongCategory)[0] === 422, 'Category edit must reject products outside its scope.');
+    $product = loadProducts($pdo)[0]; $productInput['version'] = $product['version'];
+    verify($product['status'] === 'inactive' && $product['closing'] === '12345678901238.123456', 'Metadata edit must not change receipt-derived stock.');
+    $pdo->exec("INSERT INTO products (code,name,category,unit,tracking_mode) VALUES ('UNTRACKED','Untracked','other','Piece','none')");
+    $untrackedId = $pdo->lastInsertId();
+    $pdo->prepare("INSERT INTO import_bill_details (import_bill_id,product_id,received_quantity,product_name,unit) VALUES (?,?,NULL,'Untracked','Piece')")->execute([$billId, $untrackedId]);
+    $records = loadProducts($pdo);
+    verify($records[0]['closing'] === null && $records[0]['stocks'][0]['closing'] === null, 'Untracked product quantities must not appear as zero.');
+    $duplicateProduct = $productInput; $duplicateProduct['code'] = 'UNTRACKED';
+    verify(httpManagement('products', $duplicateProduct)[0] === 422, 'Duplicate product code accepted.');
+    $pdo->exec("INSERT INTO products (code,name,category,unit) VALUES ('MISSING-QTY','Missing quantity','other','Piece')");
+    $missingQuantityId = $pdo->lastInsertId();
+    $pdo->prepare("INSERT INTO import_bill_details (import_bill_id,product_id,received_quantity,product_name,unit) VALUES (?,?,NULL,'Missing quantity','Piece')")->execute([$billId, $missingQuantityId]);
+    $missingProduct = loadProducts($pdo)[0];
+    verify($missingProduct['stock'] === 'unknown' && $missingProduct['closing'] === null, 'Missing tracked quantity must not be presented as zero stock.');
+    foreach (productPages() as $page => $category) {
+        $category = $category ?: 'other';
+        $code = 'PAGE-' . $page;
+        $pdo->prepare('INSERT INTO products (code,name,category,unit) VALUES (?,?,?,?)')->execute([$code, $code, $category, 'Piece']);
+        $pageProduct = loadManagement($pdo, $page)['products'][0];
+        verify($pageProduct['code'] === $code && $pageProduct['category'] === $category, 'Category page must read its real database product.');
+        [$pageStatus, $pageBody] = httpManagement($page);
+        verify($pageStatus === 200 && str_contains($pageBody, $code) && !str_contains($pageBody, 'data-preview="true"'), 'Category page must render database records without preview mode.');
+        $pageInput = ['csrf_token' => $csrf, 'action' => 'save', 'id' => $pageProduct['id'], 'version' => $pageProduct['version'],
+            'code' => $code, 'name' => 'Edited ' . $page, 'category' => $category, 'unit' => 'Piece', 'tracking_mode' => 'quantity', 'status' => 'active', 'specifications' => ''];
+        verify(httpManagement($page, $pageInput)[0] === 200, 'Category page must save through its own endpoint.');
+        verify(loadManagement($pdo, $page)['products'][0]['name'] === $pageInput['name'], 'Category page edit must persist in database.');
+        if (productPages()[$page] !== '') {
+            $pageInput['version'] = loadManagement($pdo, $page)['products'][0]['version'];
+            $pageInput['category'] = $category === 'other' ? 'consumable' : 'other';
+            verify(httpManagement($page, $pageInput)[0] === 422, 'Dedicated category page must reject moving a product to another group.');
+        }
+    }
     try { $pdo->exec('DELETE FROM audit_logs'); throw new RuntimeException('Immutable audit trigger missing.'); }
     catch (PDOException $error) { verify($error->getCode() === '45000', 'Unexpected audit trigger error.'); }
     $pdo->exec("CREATE TRIGGER test_audit_failure BEFORE INSERT ON audit_logs FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Test audit failure'");
+    $productInput['name'] = 'Must roll back';
+    verify(httpManagement('products', $productInput)[0] === 503, 'Product write must fail if audit insert fails.');
+    $stmt = $pdo->prepare('SELECT name FROM products WHERE id=?'); $stmt->execute([$productId]);
+    verify($stmt->fetchColumn() === 'Product <script>', 'Product update did not roll back with audit.');
     $rollbackDecisionInput = $decisionInput;
     $currentDecision = decisionSnapshot($pdo, $newDecisionId);
     $rollbackDecisionInput['version'] = $currentDecision['updated_at']; $rollbackDecisionInput['links_version'] = decisionLinksVersion($currentDecision['links']);

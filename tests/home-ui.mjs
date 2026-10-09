@@ -716,6 +716,89 @@ try {
             await evaluate('reportDialog.close()');
         }
     }
+    const productRender = spawnSync(php, ['tests/home.php', '--products', '--render'], { encoding: 'utf8', windowsHide: true });
+    assert.equal(productRender.status, 0, productRender.stderr);
+    await page('Page.navigate', { url: process.env.LOGIN_URL || 'http://localhost/qlvt-remake/public/' });
+    for (let i = 0; i < 100; i++) {
+        if (await evaluate('document.readyState === "complete" && Boolean(document.getElementById("login-form"))')) break;
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    const productFrame = await page('Page.getFrameTree');
+    await page('Page.setDocumentContent', { frameId: productFrame.frameTree.frame.id, html: productRender.stdout });
+    for (let i = 0; i < 100; i++) {
+        if (await evaluate('document.readyState === "complete" && typeof filterProducts === "function"')) break;
+        await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    assert.equal(await evaluate('document.querySelectorAll("[data-product]:not([hidden])").length'), 10);
+    await evaluate('document.getElementById("product-next").click()');
+    assert.equal(await evaluate('document.querySelectorAll("[data-product]:not([hidden])").length'), 2);
+    assert.equal(await evaluate('document.querySelectorAll(".product-groups, .product-group").length'), 0, 'Product categories should only be selected from the sidebar.');
+    for (const route of ['products', 'materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products']) {
+        assert.equal(await evaluate(`document.querySelectorAll('.navigation a[href="index.php?page=${route}"]').length`), 1);
+    }
+    await evaluate(`productStock.value='untracked'; filterProducts()`);
+    assert.equal(await evaluate('document.querySelectorAll("[data-product]:not([hidden])").length'), 3);
+    await evaluate('productStock.value=""; productStatus.value="inactive"; filterProducts()');
+    assert.equal(await evaluate('document.querySelectorAll("[data-product]:not([hidden])").length'), 4);
+    await evaluate('productStatus.value=""; productSearch.value="hang hai"; filterProducts()');
+    assert.equal(await evaluate('document.getElementById("product-count").textContent.endsWith("/ 12 hàng hóa")'), true);
+    await evaluate('productSearch.value=""; productWarehouse.value="2"; filterProducts()');
+    assert.equal(await evaluate('document.querySelector(".product-empty").hidden'), false);
+    await evaluate(`const productTest=JSON.parse(productRows[0].dataset.product); productTest.movements.push({...productTest.movements[0],warehouse_id:'2'}); productTest.stocks.push({warehouse_id:'2',incoming:'1.000000',outgoing:'3.000000',closing:'-2.000000'}); productRows[0].dataset.product=JSON.stringify(productTest); productStock.value='negative'; filterProducts()`);
+    assert.equal(await evaluate('document.querySelectorAll("[data-product]:not([hidden])").length'), 1);
+    assert.equal(await evaluate('productRows[0].querySelector("[data-product-quantity=closing]").textContent'), '-2');
+    await evaluate('productWarehouse.value=""; productStock.value=""; filterProducts()');
+    assert.equal(await evaluate('formatProductQuantity("12345678901234.123456")'), '12.345.678.901.234,123456');
+    await evaluate('document.querySelector(".edit-product").click()');
+    assert.equal(await evaluate('productForm.elements.unit.readOnly'), true);
+    await evaluate('productForm.requestSubmit()');
+    assert.equal(await evaluate('productEditor.open'), false, 'Preview editing must not post business data.');
+    for (const [width, height] of [[1440, 1000], [390, 844], [320, 568], [844, 390]]) {
+        await page('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+        await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+        assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, 'Product page overflow.');
+        let shot=await page('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+        writeFileSync(join(outputDir,`products-${width}x${height}.png`),Buffer.from(shot.data,'base64'));
+        for (const [button, dialog] of [['.product-details','productDialog'],['.edit-product','productEditor']]) {
+            await evaluate(`document.querySelector('${button}').click()`);
+            assert.equal(await evaluate(`(() => { const dialog=${dialog},body=dialog.querySelector('.account-dialog-body'),header=dialog.querySelector('header'),footer=dialog.querySelector('footer');
+                const before=[header.getBoundingClientRect().top,footer.getBoundingClientRect().top];body.scrollTop=body.scrollHeight;
+                return before[0]===header.getBoundingClientRect().top && before[1]===footer.getBoundingClientRect().top && dialog.scrollWidth<=dialog.clientWidth && dialog.scrollHeight<=dialog.clientHeight+1 && footer.getBoundingClientRect().bottom<=innerHeight; })()`),true,'Product dialogs must keep header/footer fixed.');
+            await evaluate(`${dialog}.querySelector('.account-dialog-body').scrollTop=0`);
+            shot=await page('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+            writeFileSync(join(outputDir,`${dialog}-${width}x${height}.png`),Buffer.from(shot.data,'base64'));
+            await evaluate(`${dialog}.close()`);
+        }
+    }
+    for (const [route, category, count, column] of [
+        ['materials','consumable',3,'outgoing'], ['spare-parts','spare_part',3,'specifications'],
+        ['tools','ccdc',2,'warehouses'], ['fixed-assets','fixed_asset',2,'decisions'], ['other-products','other',2,'tracking_mode']
+    ]) {
+        const render = spawnSync(php, ['tests/home.php', `--${route}`, '--render'], { encoding: 'utf8', windowsHide: true });
+        assert.equal(render.status, 0, render.stderr);
+        await page('Page.navigate', { url: process.env.LOGIN_URL || 'http://localhost/qlvt-remake/public/' });
+        for (let i=0;i<100;i++) {
+            if (await evaluate('document.readyState === "complete" && Boolean(document.getElementById("login-form"))')) break;
+            await new Promise(resolve=>setTimeout(resolve,100));
+        }
+        const frame = await page('Page.getFrameTree');
+        await page('Page.setDocumentContent', { frameId: frame.frameTree.frame.id, html: render.stdout });
+        for (let i=0;i<100;i++) {
+            if (await evaluate('document.readyState === "complete" && typeof filterProducts === "function"')) break;
+            await new Promise(resolve=>setTimeout(resolve,100));
+        }
+        assert.equal(await evaluate('productRows.length'), count);
+        assert.equal(await evaluate(`productRows.every(row=>JSON.parse(row.dataset.product).category==='${category}')`), true);
+        assert.equal(await evaluate(`Boolean(document.querySelector('[data-product-quantity="${column}"], .product-cell-${column}'))`), true);
+        assert.equal(await evaluate(`productForm.getAttribute('action')==='index.php?page=${route}' && productForm.elements.category.options.length===1 && productForm.elements.category.value==='${category}'`), true);
+        for (const [width,height] of [[1440,1000],[320,568],[844,390]]) {
+            await page('Emulation.setDeviceMetricsOverride', {width,height,deviceScaleFactor:1,mobile:false});
+            await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+            assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'), true, `${route} page overflow.`);
+            const shot=await page('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+            writeFileSync(join(outputDir,`${route}-${width}x${height}.png`),Buffer.from(shot.data,'base64'));
+        }
+    }
     assert.deepEqual(pageErrors, [], 'Browser errors.');
     assert.deepEqual(failedRequests, [], 'Asset loading errors.');
     assert.equal(postRequests, 0, 'Dashboard sample controls must not submit business data.');

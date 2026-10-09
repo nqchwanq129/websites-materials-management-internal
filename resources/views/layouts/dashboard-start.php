@@ -1,7 +1,7 @@
 <?php
 $displayName = $user['full_name'] ?? $user['username'];
 $navigation = [
-    ['box', 'Hàng hóa', [['Danh sách hàng hóa', ''], ['Vật tư', ''], ['Phụ tùng thay thế', ''], ['Công cụ, dụng cụ', ''], ['Tài sản cố định', ''], ['Hàng hóa khác', '']]],
+    ['box', 'Hàng hóa', array_map(static fn($label, $page) => [$label, (int) $user['is_super_admin'] === 1 ? 'index.php?page=' . $page : ''], ['Danh sách hàng hóa', 'Vật tư', 'Phụ tùng thay thế', 'Công cụ, dụng cụ', 'Tài sản cố định', 'Hàng hóa khác'], ['products', 'materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products'])],
     ['down', 'Phiếu nhập kho', [['Danh sách phiếu nhập', 'index.php?page=home#receipts'], ['Tạo phiếu nhập', '']]],
     ['up', 'Phiếu xuất kho', [['Danh sách phiếu xuất', 'index.php?page=home#receipts'], ['Tạo phiếu xuất', '']]],
     ['warehouse', 'Kho hàng', [['Danh sách kho', (int) $user['is_super_admin'] === 1 ? 'index.php?page=warehouses' : ''], ['Tồn kho', '']]],
@@ -48,8 +48,10 @@ $openGroup = ['accounts' => 'Hệ thống', 'audit' => 'Hệ thống', 'employee
     <link rel="stylesheet" href="assets/css/notifications.css">
     <script src="assets/vendor/simple-notify/simple-notify.min.js" defer></script>
     <script src="assets/js/dashboard.js" defer></script>
-    <?php if (in_array($activePage, ['accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'audit'], true)): ?><link rel="stylesheet" href="assets/css/accounts.css"><script src="assets/js/<?= $activePage ?>.js" defer></script><?php endif; ?>
-    <?php if (in_array($activePage, ['suppliers', 'decisions'], true)): ?><link rel="stylesheet" href="assets/css/audit.css"><?php endif; ?>
+    <?php $isProductPage = in_array($activePage, ['products', 'materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products'], true); ?>
+    <?php if ($isProductPage || in_array($activePage, ['accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'audit'], true)): ?><link rel="stylesheet" href="assets/css/accounts.css"><script src="assets/js/<?= $isProductPage ? 'products' : $activePage ?>.js" defer></script><?php endif; ?>
+    <?php if ($isProductPage || in_array($activePage, ['suppliers', 'decisions'], true)): ?><link rel="stylesheet" href="assets/css/audit.css"><?php endif; ?>
+    <?php if ($isProductPage): ?><link rel="stylesheet" href="assets/css/products.css"><?php endif; ?>
     <?php if ($activePage === 'decisions'): ?><link rel="stylesheet" href="assets/css/decisions.css"><?php endif; ?>
     <?php if ($activePage === 'reports'): ?><link rel="stylesheet" href="assets/css/accounts.css"><link rel="stylesheet" href="assets/css/reports.css"><script src="assets/vendor/sheetjs/xlsx.mini.min.js" defer></script><script src="assets/js/reports.js" defer></script><?php endif; ?>
     <?php if ($activePage === 'audit'): ?><link rel="stylesheet" href="assets/css/audit.css"><?php endif; ?>

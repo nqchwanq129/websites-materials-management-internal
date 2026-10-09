@@ -5,12 +5,14 @@ function escapeHtml(string $value): string { return htmlspecialchars($value, ENT
 $user = ['username' => 'preview-admin', 'full_name' => 'Quản trị viên <script>', 'is_super_admin' => 1];
 $_SESSION = ['csrf_token' => str_repeat('a', 64)];
 $preview = 'dashboard';
-foreach (['accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'reports', 'audit'] as $option) {
+$productPages = ['materials' => 3, 'spare-parts' => 3, 'tools' => 2, 'fixed-assets' => 2, 'other-products' => 2];
+foreach (array_merge(['products', 'accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'reports', 'audit'], array_keys($productPages)) as $option) {
     if (in_array('--' . $option, $argv, true)) $preview = $option;
 }
-$sampleRows = ['dashboard' => ['data-receipt ', 5], 'accounts' => ['data-account="', 6],
+$sampleRows = ['dashboard' => ['data-receipt ', 5], 'products' => ['data-product="', 12], 'accounts' => ['data-account="', 6],
     'employees' => ['data-employee="', 12], 'warehouses' => ['data-warehouse="', 12], 'suppliers' => ['data-supplier="', 12], 'decisions' => ['data-decision="', 12], 'reports' => ['data-report-row>', 60], 'audit' => ['data-audit="', 14]];
 $previewOnly = true;
+foreach ($productPages as $productPage => $count) $sampleRows[$productPage] = ['data-product="', $count];
 if ($preview === 'reports') {
     require dirname(__DIR__) . '/app/reports.php';
     $reportData = require dirname(__DIR__) . '/resources/data/reports-preview.php';
@@ -18,7 +20,7 @@ if ($preview === 'reports') {
     foreach ($argv as $argument) if (str_starts_with($argument, '--report-kind=')) $kind = substr($argument, 14);
     $filters = reportFilters(['kind' => $kind], $reportData); $report = buildReport($reportData, $filters); $reportError = '';
     $sampleRows['reports'][1] = $kind === 'inventory' ? 60 : 12;
-} elseif ($preview !== 'dashboard') require __DIR__ . '/fixtures/' . $preview . '.php';
+} elseif ($preview !== 'dashboard') require __DIR__ . '/fixtures/' . (isset($productPages[$preview]) ? 'products' : $preview) . '.php';
 ob_start();
 require dirname(__DIR__) . '/resources/views/' . ($preview === 'dashboard' ? 'dashboard/home.php' : $preview . '/index.php');
 $html = ob_get_clean();
