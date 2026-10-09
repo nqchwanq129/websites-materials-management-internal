@@ -30,17 +30,18 @@ function httpManagement(string $page, ?array $fields = null): array {
     preg_match('/\s(\d{3})\s/', $http_response_header[0], $match);
     return [(int) $match[1], $body, $http_response_header];
 }
-function httpDecisionPdf(array $fields, string $pdf, string $name = 'quyet-dinh.pdf'): array {
+function httpDecisionPdf(array $fields, string $pdf, string $name = 'quyet-dinh.pdf', string $page = 'decisions', string $fileField = 'pdf'): array {
     global $base, $cookie;
     $boundary = 'qlvt-' . bin2hex(random_bytes(12)); $body = '';
     foreach ($fields as $key => $value) {
         verify(is_string($value), 'Multipart test fields must be strings.');
         $body .= "--$boundary\r\nContent-Disposition: form-data; name=\"$key\"\r\n\r\n$value\r\n";
     }
-    $body .= "--$boundary\r\nContent-Disposition: form-data; name=\"pdf\"; filename=\"$name\"\r\nContent-Type: application/pdf\r\n\r\n$pdf\r\n--$boundary--\r\n";
+    $mime = $fileField === 'xml' ? 'application/xml' : 'application/pdf';
+    $body .= "--$boundary\r\nContent-Disposition: form-data; name=\"$fileField\"; filename=\"$name\"\r\nContent-Type: $mime\r\n\r\n$pdf\r\n--$boundary--\r\n";
     $context = stream_context_create(['http' => ['method' => 'POST', 'header' => "Cookie: $cookie\r\nContent-Type: multipart/form-data; boundary=$boundary\r\n",
         'content' => $body, 'ignore_errors' => true, 'follow_location' => 0, 'timeout' => 10]]);
-    $response = file_get_contents($base . 'index.php?page=decisions', false, $context);
+    $response = file_get_contents($base . 'index.php?page=' . $page, false, $context);
     preg_match('/\s(\d{3})\s/', $http_response_header[0], $match);
     return [(int) $match[1], $response];
 }
@@ -331,6 +332,13 @@ try {
     $records = loadManagement($pdo, 'products')['products']; $product = $records[0];
     verify($product['incoming'] === '12345678901239.123456' && $product['outgoing'] === '1.000000' && $product['closing'] === '12345678901238.123456', 'Product stock must retain DECIMAL precision and exclude drafts without join multiplication.');
     verify(count($product['stocks']) === 2 && count($product['movements']) === 5, 'Product warehouse balance/history incorrect.');
+    $importRecords = loadManagement($pdo, 'imports')['imports'];
+    $importRecord = array_values(array_filter($importRecords, static fn($row) => $row['id'] === (string) $billId))[0];
+    verify($importRecord['status'] === 'confirmed' && count($importRecord['items']) > 0, 'Import list must include header and related lines.');
+    verify(count(array_filter($importRecords, static fn($row) => $row['status'] === 'draft')) > 0, 'Import list must preserve draft receipts.');
+    [$importStatus, $importBody] = httpManagement('imports');
+    verify($importStatus === 200 && str_contains($importBody, 'data-import=') && str_contains($importBody, 'id="import-dialog"'), 'Import route must render database receipts.');
+    verify(httpManagement('imports', ['csrf_token' => $csrf, 'action' => 'delete', 'id' => (string) $billId])[0] === 405, 'Import list must not mutate receipts.');
     $productInput = ['csrf_token' => $csrf, 'action' => 'save', 'id' => $productId, 'version' => $product['version'], 'code' => $product['code'], 'name' => 'Product <script>',
         'category' => 'other', 'unit' => 'Piece', 'tracking_mode' => 'quantity', 'status' => 'inactive', 'specifications' => 'Updated specification'];
     verify(httpManagement('products', array_diff_key($productInput, ['csrf_token' => true]))[0] === 403, 'Product CSRF bypass.');
@@ -381,9 +389,77 @@ try {
             verify(httpManagement($page, $pageInput)[0] === 422, 'Dedicated category page must reject moving a product to another group.');
         }
     }
+    $invoiceXml = '<HDon xmlns="urn:test"><DLHDon><TTChung><SHDon>XML-001</SHDon><KHHDon>C26T</KHHDon><NLap>2026-10-10</NLap><DVTTe>VND</DVTTe></TTChung><NDHDon><NBan><Ten>Seller XML</Ten><MST>XML-TAX</MST><DChi>Address</DChi></NBan><DSHHDVu><HHDVu><TChat>1</TChat><MHHDVu>XML-SKU</MHHDVu><THHDVu>XML product</THHDVu><DVTinh>Piece</DVTinh><SLuong>1.123456</SLuong><DGia>2.5</DGia><ThTien>2.808640</ThTien><TSuat>10%</TSuat></HHDVu></DSHHDVu><TToan><TgTCThue>2.808640</TgTCThue><TgTTTBSo>3.089504</TgTTTBSo></TToan></NDHDon></DLHDon></HDon>';
+    $parsedInvoice = parseImportXml($invoiceXml);
+    verify($parsedInvoice['tax_code'] === 'XML-TAX' && $parsedInvoice['items'][0]['quantity'] === '1.123456', 'Namespaced XML seller and quantities must retain precision.');
+    rejected(fn() => parseImportXml('<!DOCTYPE HDon [<!ENTITY x SYSTEM "file:///etc/passwd">]>' . $invoiceXml));
+    rejected(fn() => parseImportXml('<broken>'));
+    rejected(fn() => parseImportXml(str_replace('<TChat>1</TChat>', '<TChat>3</TChat>', $invoiceXml)));
+    verify(httpDecisionPdf(['action' => 'xml'], $invoiceXml, 'invoice.xml', 'import-create', 'xml')[0] === 403, 'XML upload must require CSRF.');
+    [$xmlStatus, $xmlBody] = httpDecisionPdf(['action' => 'xml', 'csrf_token' => $csrf], $invoiceXml, 'invoice.xml', 'import-create', 'xml');
+    verify($xmlStatus === 200 && json_decode($xmlBody, true)['invoice']['supplier_name'] === 'Seller XML', 'XML endpoint must return parsed preview without writes.');
+    $createInput = ['csrf_token' => $csrf, 'action' => 'create', 'warehouse' => $warehouseIds[0], 'number' => 'CREATED-XML', 'received_date' => '2026-10-10',
+        'receipt_type' => 'purchase', 'status' => 'confirmed', 'supplier_id' => '', 'supplier_name' => 'Seller XML', 'tax_code' => 'XML-TAX',
+        'invoice_number' => 'XML-001', 'invoice_series' => 'C26T', 'invoice_date' => '2026-10-10', 'invoice_before_tax' => '2.808640', 'invoice_after_tax' => '3.089504',
+        'items' => json_encode($parsedInvoice['items'])];
+    verify(httpManagement('import-create', array_diff_key($createInput, ['csrf_token' => true]))[0] === 403, 'Receipt create must require CSRF.');
+    rejected(fn() => saveManagement($pdo, 'import-create', $targetId, $createInput));
+    $beforeCounts = $pdo->query('SELECT (SELECT COUNT(*) FROM products) AS products,(SELECT COUNT(*) FROM suppliers) AS suppliers,(SELECT COUNT(*) FROM import_bill) AS bills')->fetch();
+    $badCreate = $createInput; $badCreate['invoice_after_tax'] = '99';
+    verify(httpManagement('import-create', $badCreate)[0] === 422, 'Invoice total mismatch must be rejected.');
+    verify($pdo->query('SELECT (SELECT COUNT(*) FROM products) AS products,(SELECT COUNT(*) FROM suppliers) AS suppliers,(SELECT COUNT(*) FROM import_bill) AS bills')->fetch() === $beforeCounts, 'Invalid receipt must roll back supplier/product creation.');
+    verify(httpManagement('import-create', $createInput)[0] === 200, 'Creating receipt from XML preview failed.');
+    $createdBill = array_values(array_filter(loadImports($pdo), static fn($row) => $row['number'] === 'CREATED-XML'))[0];
+    verify($createdBill['total_before_tax'] === '2.808640' && $createdBill['total_after_tax'] === '3.089504' && $createdBill['items'][0]['decision_status'] === 'pending', 'Server totals or pending decisions incorrect.');
+    $createdProduct = array_values(array_filter(loadProducts($pdo), static fn($row) => $row['code'] === 'XML-SKU'))[0];
+    verify($createdProduct['closing'] === '1.123456' && $createdProduct['category'] === 'other', 'Confirmed new receipt must appear in stock and category pages.');
+    $duplicateCreate = $createInput; $duplicateCreate['number'] = 'CREATED-XML-2';
+    verify(httpManagement('import-create', $duplicateCreate)[0] === 422, 'Duplicate supplier invoice must be rejected.');
+    $draftItem = ['product_id' => $createdProduct['id'], 'version' => $createdProduct['version'], 'quantity' => '2', 'unit_price' => '1', 'tax_code' => 'KCT', 'name' => 'Tampered name', 'unit' => 'Tampered unit'];
+    $draftCreate = $createInput; $draftCreate['number'] = 'CREATED-DRAFT'; $draftCreate['status'] = 'draft'; $draftCreate['invoice_number'] = '';
+    $draftCreate['invoice_before_tax'] = ''; $draftCreate['invoice_after_tax'] = ''; $draftCreate['items'] = json_encode([$draftItem]);
+    verify(httpManagement('import-create', $draftCreate)[0] === 200, 'Existing product draft receipt failed.');
+    $draftBill = array_values(array_filter(loadImports($pdo), static fn($row) => $row['number'] === 'CREATED-DRAFT'))[0];
+    verify($draftBill['items'][0]['product_name'] === 'XML product' && $draftBill['items'][0]['unit'] === 'Piece', 'Existing product metadata must come from database.');
+    verify(array_values(array_filter(loadProducts($pdo), static fn($row) => $row['code'] === 'XML-SKU'))[0]['closing'] === '1.123456', 'Draft must not increase stock.');
+    verify(httpManagement('import-create', $draftCreate)[0] === 422, 'Duplicate warehouse/year receipt number must be rejected.');
+    $staleCreate = $draftCreate; $staleCreate['number'] = 'STALE-CATALOGUE';
+    $staleItem = $draftItem; $staleItem['version'] = '2000-01-01 00:00:00.000000'; $staleCreate['items'] = json_encode([$staleItem]);
+    verify(httpManagement('import-create', $staleCreate)[0] === 422, 'Receipt must reject stale product metadata to prevent reinterpreting quantities under a changed unit.');
+    $badCreate = $draftCreate; $badCreate['number'] = 'BAD-QUANTITY'; $draftItem['quantity'] = '0'; $badCreate['items'] = json_encode([$draftItem]);
+    verify(httpManagement('import-create', $badCreate)[0] === 422, 'Zero tracked quantity must be rejected.');
+    $service = ['product_id' => '', 'code' => 'SERVICE', 'name' => 'Service', 'category' => 'other', 'unit' => 'Lần', 'tracking_mode' => 'none', 'quantity' => '', 'unit_price' => '10', 'tax_code' => 'KCT'];
+    $serviceCreate = $draftCreate; $serviceCreate['number'] = 'SERVICE-RECEIPT'; $serviceCreate['status'] = 'confirmed'; $serviceCreate['items'] = json_encode([$service]);
+    verify(httpManagement('import-create', $serviceCreate)[0] === 200, 'Untracked service receipt failed.');
+    verify(array_values(array_filter(loadProducts($pdo), static fn($row) => $row['code'] === 'SERVICE'))[0]['closing'] === null, 'Untracked service must not invent stock.');
+    $repeatedService = $service; $repeatedService['code'] = 'REPEATED-SERVICE';
+    $repeatedCreate = $serviceCreate; $repeatedCreate['number'] = 'REPEATED-LINES'; $repeatedCreate['items'] = json_encode([$repeatedService, $repeatedService]);
+    verify(httpManagement('import-create', $repeatedCreate)[0] === 200, 'Repeated new SKU lines must be accepted without duplicate catalogue products.');
+    $repeatedBill = array_values(array_filter(loadImports($pdo), static fn($row) => $row['number'] === 'REPEATED-LINES'))[0];
+    verify(count($repeatedBill['items']) === 2 && $repeatedBill['items'][0]['product_id'] === $repeatedBill['items'][1]['product_id'] && $repeatedBill['total_before_tax'] === '20.000000', 'Repeated lines must retain individual amounts and share one new product.');
+    $pdfCreate = $draftCreate; $pdfCreate['number'] = 'PDF-RECEIPT';
+    verify(httpDecisionPdf($pdfCreate, '<html>bad file</html>', 'bad.pdf', 'import-create')[0] === 422, 'Receipt attachment must reject non-PDF files.');
+    verify(httpDecisionPdf($pdfCreate, $pdf, 'invoice.pdf', 'import-create')[0] === 200, 'Receipt PDF upload failed.');
+    $pdfBill = array_values(array_filter(loadImports($pdo), static fn($row) => $row['number'] === 'PDF-RECEIPT'))[0];
+    verify(count($pdfBill['attachments']) === 1, 'Receipt list must expose linked PDF metadata.');
+    $importPdfId = (string) $pdfBill['attachments'][0]['id'];
+    [$downloadStatus, $downloadPdf] = httpManagement('import-file&id=' . $importPdfId);
+    verify($downloadStatus === 200 && $downloadPdf === $pdf, 'Receipt PDF must download after authorization.');
+    verify(httpManagement('decision-file&id=' . $importPdfId)[0] === 404, 'Receipt PDF must not be exposed through the decision file endpoint.');
+    $savedCookie = $cookie; $cookie = '';
+    verify(httpManagement('import-file&id=' . $importPdfId)[0] === 303, 'Guest must not download receipt PDF.'); $cookie = $savedCookie;
+    $pdo->prepare('UPDATE users SET is_super_admin=0 WHERE id=?')->execute([$actorId]);
+    verify(httpManagement('import-file&id=' . $importPdfId)[0] === 403, 'Non-admin must not download receipt PDF.');
+    $pdo->prepare('UPDATE users SET is_super_admin=1 WHERE id=?')->execute([$actorId]);
     try { $pdo->exec('DELETE FROM audit_logs'); throw new RuntimeException('Immutable audit trigger missing.'); }
     catch (PDOException $error) { verify($error->getCode() === '45000', 'Unexpected audit trigger error.'); }
     $pdo->exec("CREATE TRIGGER test_audit_failure BEFORE INSERT ON audit_logs FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Test audit failure'");
+    $rollbackCreate = $draftCreate; $rollbackCreate['number'] = 'MUST-ROLLBACK';
+    verify(httpManagement('import-create', $rollbackCreate)[0] === 503, 'Receipt creation must fail if audit insert fails.');
+    verify(!(int) $pdo->query("SELECT COUNT(*) FROM import_bill WHERE number='MUST-ROLLBACK'")->fetchColumn(), 'Receipt must roll back together with audit.');
+    $importFilesBefore = count(glob($testRoot . '/storage/uploads/imports/*.pdf'));
+    verify(httpDecisionPdf($rollbackCreate, $pdf, 'rollback.pdf', 'import-create')[0] === 503, 'PDF receipt must roll back on audit failure.');
+    verify(count(glob($testRoot . '/storage/uploads/imports/*.pdf')) === $importFilesBefore, 'Rollback must remove receipt PDF from disk.');
     $productInput['name'] = 'Must roll back';
     verify(httpManagement('products', $productInput)[0] === 503, 'Product write must fail if audit insert fails.');
     $stmt = $pdo->prepare('SELECT name FROM products WHERE id=?'); $stmt->execute([$productId]);

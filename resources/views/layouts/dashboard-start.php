@@ -2,7 +2,7 @@
 $displayName = $user['full_name'] ?? $user['username'];
 $navigation = [
     ['box', 'Hàng hóa', array_map(static fn($label, $page) => [$label, (int) $user['is_super_admin'] === 1 ? 'index.php?page=' . $page : ''], ['Danh sách hàng hóa', 'Vật tư', 'Phụ tùng thay thế', 'Công cụ, dụng cụ', 'Tài sản cố định', 'Hàng hóa khác'], ['products', 'materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products'])],
-    ['down', 'Phiếu nhập kho', [['Danh sách phiếu nhập', 'index.php?page=home#receipts'], ['Tạo phiếu nhập', '']]],
+    ['down', 'Phiếu nhập kho', [['Danh sách phiếu nhập', (int) $user['is_super_admin'] === 1 ? 'index.php?page=imports' : ''], ['Tạo phiếu nhập', (int) $user['is_super_admin'] === 1 ? 'index.php?page=import-create' : '']]],
     ['up', 'Phiếu xuất kho', [['Danh sách phiếu xuất', 'index.php?page=home#receipts'], ['Tạo phiếu xuất', '']]],
     ['warehouse', 'Kho hàng', [['Danh sách kho', (int) $user['is_super_admin'] === 1 ? 'index.php?page=warehouses' : ''], ['Tồn kho', '']]],
     ['file', 'Quyết định', [['Danh sách quyết định', (int) $user['is_super_admin'] === 1 ? 'index.php?page=decisions' : '']]],
@@ -33,7 +33,7 @@ $icons = [
 ];
 $icon = static fn(string $name): string => '<svg class="icon" aria-hidden="true"><use href="#i-' . $name . '"/></svg>';
 $activeNavTarget = $activeNavTarget ?? 'index.php?page=' . $activePage;
-$openGroup = ['accounts' => 'Hệ thống', 'audit' => 'Hệ thống', 'employees' => 'Danh mục', 'suppliers' => 'Danh mục', 'decisions' => 'Quyết định', 'warehouses' => 'Kho hàng', 'reports' => 'Báo cáo & thống kê'][$activePage] ?? 'Hàng hóa';
+$openGroup = ['import-create' => 'Phiếu nhập kho', 'imports' => 'Phiếu nhập kho', 'accounts' => 'Hệ thống', 'audit' => 'Hệ thống', 'employees' => 'Danh mục', 'suppliers' => 'Danh mục', 'decisions' => 'Quyết định', 'warehouses' => 'Kho hàng', 'reports' => 'Báo cáo & thống kê'][$activePage] ?? 'Hàng hóa';
 ?>
 <!DOCTYPE html>
 <html lang="vi">
@@ -49,8 +49,9 @@ $openGroup = ['accounts' => 'Hệ thống', 'audit' => 'Hệ thống', 'employee
     <script src="assets/vendor/simple-notify/simple-notify.min.js" defer></script>
     <script src="assets/js/dashboard.js" defer></script>
     <?php $isProductPage = in_array($activePage, ['products', 'materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products'], true); ?>
-    <?php if ($isProductPage || in_array($activePage, ['accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'audit'], true)): ?><link rel="stylesheet" href="assets/css/accounts.css"><script src="assets/js/<?= $isProductPage ? 'products' : $activePage ?>.js" defer></script><?php endif; ?>
-    <?php if ($isProductPage || in_array($activePage, ['suppliers', 'decisions'], true)): ?><link rel="stylesheet" href="assets/css/audit.css"><?php endif; ?>
+    <?php if ($isProductPage || in_array($activePage, ['import-create', 'imports', 'accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'audit'], true)): ?><link rel="stylesheet" href="assets/css/accounts.css"><script src="assets/js/<?= $isProductPage ? 'products' : $activePage ?>.js" defer></script><?php endif; ?>
+    <?php if ($activePage === 'import-create'): ?><link rel="stylesheet" href="assets/css/import-create.css"><?php endif; ?>
+    <?php if ($isProductPage || in_array($activePage, ['imports', 'suppliers', 'decisions'], true)): ?><link rel="stylesheet" href="assets/css/audit.css"><?php endif; ?>
     <?php if ($isProductPage): ?><link rel="stylesheet" href="assets/css/products.css"><?php endif; ?>
     <?php if ($activePage === 'decisions'): ?><link rel="stylesheet" href="assets/css/decisions.css"><?php endif; ?>
     <?php if ($activePage === 'reports'): ?><link rel="stylesheet" href="assets/css/accounts.css"><link rel="stylesheet" href="assets/css/reports.css"><script src="assets/vendor/sheetjs/xlsx.mini.min.js" defer></script><script src="assets/js/reports.js" defer></script><?php endif; ?>

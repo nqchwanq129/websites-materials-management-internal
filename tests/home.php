@@ -6,10 +6,10 @@ $user = ['username' => 'preview-admin', 'full_name' => 'Quản trị viên <scri
 $_SESSION = ['csrf_token' => str_repeat('a', 64)];
 $preview = 'dashboard';
 $productPages = ['materials' => 3, 'spare-parts' => 3, 'tools' => 2, 'fixed-assets' => 2, 'other-products' => 2];
-foreach (array_merge(['products', 'accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'reports', 'audit'], array_keys($productPages)) as $option) {
+foreach (array_merge(['import-create', 'imports', 'products', 'accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'reports', 'audit'], array_keys($productPages)) as $option) {
     if (in_array('--' . $option, $argv, true)) $preview = $option;
 }
-$sampleRows = ['dashboard' => ['data-receipt ', 5], 'products' => ['data-product="', 12], 'accounts' => ['data-account="', 6],
+$sampleRows = ['dashboard' => ['data-receipt ', 5], 'import-create' => ['id="import-create-form"', 1], 'imports' => ['data-import="', 12], 'products' => ['data-product="', 12], 'accounts' => ['data-account="', 6],
     'employees' => ['data-employee="', 12], 'warehouses' => ['data-warehouse="', 12], 'suppliers' => ['data-supplier="', 12], 'decisions' => ['data-decision="', 12], 'reports' => ['data-report-row>', 60], 'audit' => ['data-audit="', 14]];
 $previewOnly = true;
 foreach ($productPages as $productPage => $count) $sampleRows[$productPage] = ['data-product="', $count];

@@ -83,6 +83,8 @@ try {
     check(request('index.php?page=decisions')[0] === 303, 'Guests must not access decisions.');
     check(request('index.php?page=reports')[0] === 303, 'Guests must not access reports.');
     check(request('index.php?page=products')[0] === 303, 'Guests must not access products.');
+    check(request('index.php?page=imports')[0] === 303, 'Guests must not access imports.');
+    check(request('index.php?page=import-create')[0] === 303, 'Guests must not create imports.');
     foreach (['materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products'] as $route) check(request('index.php?page=' . $route)[0] === 303, 'Guests must not access category pages.');
     check(request('index.php?page=audit')[0] === 303, 'Guests must not access audit logs.');
     check(request('index.php', ['username' => $username, 'password' => $password])[0] === 303, 'Missing CSRF token should redirect to login.');
@@ -99,6 +101,9 @@ try {
     check(request('index.php?page=suppliers')[0] === 200, 'Super admin should access suppliers.');
     check(request('index.php?page=decisions')[0] === 200, 'Super admin should access decisions.');
     check(request('index.php?page=products')[0] === 200, 'Admin should access products.');
+    check(request('index.php?page=imports')[0] === 200, 'Admin should access imports.');
+    check(request('index.php?page=import-create')[0] === 200, 'Admin should access receipt creation.');
+    check(request('index.php?page=imports', ['csrf_token' => $logoutToken])[0] === 405, 'Import list must reject writes.');
     foreach (['materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products'] as $route) check(request('index.php?page=' . $route)[0] === 200, 'Admin should access category pages.');
     check(request('index.php?page=products', ['csrf_token' => $logoutToken])[0] === 422, 'Invalid product edit must fail.');
     foreach (['inventory', 'materials', 'parts', 'tools', 'assets'] as $kind) {
@@ -121,6 +126,8 @@ try {
     check(request('index.php?page=decisions')[0] === 403, 'Non-admin users must not access decisions.');
     check(request('index.php?page=reports')[0] === 403, 'Non-admin report access must be blocked.');
     check(request('index.php?page=products')[0] === 403, 'Non-admin product access must be blocked.');
+    check(request('index.php?page=imports')[0] === 403, 'Non-admin import access must be blocked.');
+    check(request('index.php?page=import-create')[0] === 403, 'Non-admin receipt creation must be blocked.');
     foreach (['materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products'] as $route) check(request('index.php?page=' . $route)[0] === 403, 'Non-admin category access must be blocked.');
     check(request('index.php?page=warehouses', ['csrf_token' => $logoutToken, 'action' => 'save'])[0] === 403, 'Non-admin users must not change warehouses.');
     check(request('index.php?page=audit')[0] === 403, 'Non-admin users must not access audit logs.');

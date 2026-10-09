@@ -144,7 +144,7 @@ async function submitManagementForm(form, dialog, noticeId) {
             if (response.status === 422) failureStatus = 'warning';
             throw new Error(result.message || 'Không thể lưu dữ liệu.');
         }
-        window.location.assign(endpoint);
+        window.location.assign(form.dataset.successUrl || endpoint);
     } catch (failure) {
         error.textContent = failure.message || 'Không thể kết nối. Vui lòng thử lại.';
         error.hidden = false;

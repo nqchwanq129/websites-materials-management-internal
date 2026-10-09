@@ -181,3 +181,19 @@ Checks: `php tests/reports.php`, `php tests/home.php --reports`, `php tests/home
 Editing updates catalogue fields and audits the change atomically, with CSRF/admin checks and stale-version protection. Product unit and tracking mode cannot change after any receipt history exists. Stock quantities are never editable catalogue fields. No direct product creation or deletion is added in this list stage. UI samples are test fixtures only; no sample catalogue records are inserted into production.
 
 Checks: `php tests/home.php --products`, `php tests/auth.php`, `php tests/management.php` (isolated database), and `node tests/home-ui.mjs`.
+
+### Import receipt list
+
+`index.php?page=imports` reads real `import_bill` and `import_bill_details` records for super admins. It supports accent-insensitive searches (including line items), warehouse/type/status filters, inclusive date ranges, date/number sorting and 10 receipts per page. Detail dialogs show invoice and supplier information, the creator, stored header totals and historical line-item snapshots with taxes, related decisions and attached invoice PDFs. Decimal values retain all six fractional digits. Only the dialog body scrolls; its heading and close button remain fixed. The list includes drafts and cancelled receipts for reference and rejects POST requests; receipt editing and lifecycle changes are separate work.
+
+Checks: `php tests/home.php --imports`, `php tests/auth.php`, `php tests/management.php`, `node tests/home-ui.mjs`.
+
+### Create import receipts
+
+`index.php?page=import-create` creates a draft or immediately confirmed receipt with 1–200 lines in an active warehouse. Choose active existing products/suppliers or create them with the receipt. Empty product codes receive generated codes; existing codes must be selected explicitly. Tax codes identify suppliers; unnamed-tax suppliers reuse an exact name match. Existing catalogue metadata is authoritative and receipt lines retain their snapshots. All new lines start with pending decisions, ready to attach after purchase. Confirmed receipts contribute to stock immediately; drafts do not. BCMath recalculates quantities, before-tax values, taxes and totals on the server; the browser uses BigInt for matching previews. Numbers accept a decimal dot or comma, up to 14 integer digits and six decimals, without grouping separators.
+
+XML upload reads one VND `DLHDon` invoice, including namespaces, seller fields, invoice identity, `HHDVu` lines and totals. The preview endpoint performs no business writes. DTD/entities, malformed XML, multiple invoices, unsupported discount/adjustment lines and uploads above 2 MiB are rejected. Reviewed fields are submitted as ordinary validated form data; invoice totals must match line totals when supplied. This reads invoice data and does not verify digital signatures. Replace confirmation preserves a form already being edited until approved. Active products match by code, or unambiguous name/unit/tracking mode; suppliers match by tax code. A non-cancelled invoice identity cannot be imported twice; the database also enforces warehouse/year/receipt number uniqueness.
+
+Optional PDF invoices use the existing `attachments.import_bill_id`, with the same extension/MIME/signature validation and download protection as decision PDFs. Files are saved outside public in `storage/uploads/imports/` and are excluded from commits. Receipt/product/supplier/audit writes are one transaction; a failure removes any newly uploaded PDF as well. No schema migration or sample business insert is needed. Keep database and uploaded documents together in backups.
+
+Checks: `php tests/home.php --import-create`, `php tests/management.php` (isolated database), `php tests/auth.php`, `node tests/home-ui.mjs`.

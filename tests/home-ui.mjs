@@ -799,6 +799,102 @@ try {
             writeFileSync(join(outputDir,`${route}-${width}x${height}.png`),Buffer.from(shot.data,'base64'));
         }
     }
+    const importRender=spawnSync(php,['tests/home.php','--imports','--render'],{encoding:'utf8',windowsHide:true});
+    assert.equal(importRender.status,0,importRender.stderr);
+    await page('Page.navigate',{url:process.env.LOGIN_URL || 'http://localhost/qlvt-remake/public/'});
+    for (let i=0;i<100;i++) {
+        if (await evaluate('document.readyState === "complete" && Boolean(document.getElementById("login-form"))')) break;
+        await new Promise(resolve=>setTimeout(resolve,100));
+    }
+    const importFrame=await page('Page.getFrameTree');
+    await page('Page.setDocumentContent',{frameId:importFrame.frameTree.frame.id,html:importRender.stdout});
+    for (let i=0;i<100;i++) {
+        if (await evaluate('document.readyState === "complete" && typeof filterImports === "function"')) break;
+        await new Promise(resolve=>setTimeout(resolve,100));
+    }
+    assert.equal(await evaluate('document.querySelectorAll("[data-import]:not([hidden])").length'),10);
+    assert.equal(await evaluate(`Boolean(document.querySelector('.navigation a[href="index.php?page=imports"].active[aria-current=page]')?.closest('details[open]'))`),true,'Import sidebar must link to the real page and expand its group.');
+    await evaluate('importNext.click()');
+    assert.equal(await evaluate('document.querySelectorAll("[data-import]:not([hidden])").length'),2);
+    await evaluate('importStatus.value="confirmed";filterImports()');
+    assert.equal(await evaluate('document.querySelectorAll("[data-import]:not([hidden])").length'),4);
+    await evaluate('importStatus.value="";importWarehouse.value="2";filterImports()');
+    assert.equal(await evaluate('document.querySelectorAll("[data-import]:not([hidden])").length'),6);
+    await evaluate('importWarehouse.value="";importType.value="purchase";filterImports()');
+    assert.equal(await evaluate('document.querySelectorAll("[data-import]:not([hidden])").length'),3);
+    await evaluate('importType.value="";importSearch.value="thiet bi";filterImports()');
+    assert.equal(await evaluate('document.getElementById("import-count").textContent.endsWith("/ 12 phiếu nhập")'),true);
+    await evaluate('importSearch.value="";importStart.value="2026-10-03";importEnd.value="2026-10-05";filterImports()');
+    assert.equal(await evaluate('document.querySelectorAll("[data-import]:not([hidden])").length'),3);
+    await evaluate('importStart.value="2026-10-06";filterImports()');
+    assert.equal(await evaluate('document.getElementById("import-error").hidden'),false);
+    await evaluate('document.getElementById("import-reset").click();importSort.value="oldest";filterImports()');
+    assert.equal(await evaluate('JSON.parse(document.querySelector("[data-import]:not([hidden])").dataset.import).number'),'PN-001');
+    await evaluate('document.querySelector("[data-import]:not([hidden]) .import-details").click()');
+    assert.equal(await evaluate('document.querySelectorAll("#import-item-rows tr").length'),14);
+    assert.equal(await evaluate('document.querySelector("#import-item-rows td").textContent.includes("<script>")'),true);
+    assert.equal(await evaluate('document.querySelector("#import-item-rows td:nth-child(3)").textContent.includes("12.345.678.901.234,123456")'),true);
+    for (const [width,height] of [[1440,1000],[390,844],[320,568],[844,390]]) {
+        await evaluate('importDialog.close()');
+        await page('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
+        await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+        assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,'Import page overflow.');
+        let shot=await page('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+        writeFileSync(join(outputDir,`imports-${width}x${height}.png`),Buffer.from(shot.data,'base64'));
+        await evaluate('document.querySelector("[data-import]:not([hidden]) .import-details").click()');
+        assert.equal(await evaluate(`(() => { const body=importDialog.querySelector('.account-dialog-body'),header=importDialog.querySelector('header'),footer=importDialog.querySelector('footer');
+            const before=[header.getBoundingClientRect().top,footer.getBoundingClientRect().top];body.scrollTop=body.scrollHeight;
+            return before[0]===header.getBoundingClientRect().top && before[1]===footer.getBoundingClientRect().top && importDialog.scrollWidth<=importDialog.clientWidth && importDialog.scrollHeight<=importDialog.clientHeight+1 && footer.getBoundingClientRect().bottom<=innerHeight; })()`),true,'Import detail must keep header/footer fixed.');
+        await evaluate('importDialog.querySelector(".account-dialog-body").scrollTop=0');
+        shot=await page('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+        writeFileSync(join(outputDir,`import-dialog-${width}x${height}.png`),Buffer.from(shot.data,'base64'));
+    }
+    const createRender=spawnSync(php,['tests/home.php','--import-create','--render'],{encoding:'utf8',windowsHide:true});
+    assert.equal(createRender.status,0,createRender.stderr);
+    await page('Page.navigate',{url:process.env.LOGIN_URL || 'http://localhost/qlvt-remake/public/'});
+    for(let i=0;i<100;i++) {
+        if(await evaluate('document.readyState === "complete" && Boolean(document.getElementById("login-form"))'))break;
+        await new Promise(resolve=>setTimeout(resolve,100));
+    }
+    const createFrame=await page('Page.getFrameTree');
+    await page('Page.setDocumentContent',{frameId:createFrame.frameTree.frame.id,html:createRender.stdout});
+    for(let i=0;i<100;i++) {
+        if(await evaluate('document.readyState === "complete" && typeof addImportLine === "function"'))break;
+        await new Promise(resolve=>setTimeout(resolve,100));
+    }
+    assert.equal(await evaluate('importLines.children.length'),1);
+    assert.equal(await evaluate('importCreateForm.elements.warehouse.options.length'),2,'Inactive warehouse must be excluded.');
+    await evaluate(`for(const [key,value] of Object.entries({name:'New product',unit:'Piece',quantity:'1.123456',unit_price:'2.5',tax_code:'10%'}))importLines.firstElementChild.querySelector('[data-field='+key+']').value=value; updateImportTotals()`);
+    assert.equal(await evaluate('document.getElementById("import-total-after").textContent'),'3,089504 ₫','Preview totals must use exact decimals.');
+    await evaluate('const selectedImportLine=importLines.firstElementChild;selectedImportLine.querySelector("[data-field=product_id]").value="1";configureImportLine(selectedImportLine,true)');
+    assert.equal(await evaluate('importLines.firstElementChild.querySelector("[data-field=name]").readOnly'),true);
+    assert.equal(await evaluate('importLines.firstElementChild.querySelector("[data-field=category]").disabled'),true);
+    await evaluate('supplierSelect.value="1";configureImportSupplier()');
+    assert.equal(await evaluate('importCreateForm.elements.tax_code.readOnly'),true);
+    await evaluate(`applyImportInvoice({invoice_number:'HD-TEST',invoice_series:'C26T',invoice_date:'2026-10-10',supplier_name:'Seller',tax_code:'1234567890',items:[
+        {product_id:'',code:'HH-001',name:'Invoice item',unit:'Chiếc',category:'other',tracking_mode:'quantity',quantity:'2',unit_price:'2',tax_code:'8%',tax_amount:'',specifications:'',note:''},
+        {product_id:'',code:'XML-NEW',name:'Service <script>',unit:'Lần',category:'other',tracking_mode:'none',quantity:'',unit_price:'10',tax_code:'KCT',tax_amount:'',specifications:'',note:''}]})`);
+    assert.equal(await evaluate('importLines.children.length'),2);
+    assert.equal(await evaluate('importLines.firstElementChild.querySelector("[data-field=product_id]").value'),'1','XML must match an existing product code.');
+    assert.equal(await evaluate('importLines.lastElementChild.querySelector("[data-field=quantity]").disabled'),true);
+    assert.equal(await evaluate('document.getElementById("import-total-after").textContent'),'14,32 ₫');
+    assert.equal(await evaluate('importCreateForm.elements.supplier_id.value'),'1','XML must match supplier tax code.');
+    await evaluate('importCreateForm.elements.warehouse.value="1";importCreateForm.requestSubmit()');
+    assert.equal(await evaluate('document.getElementById("import-create-notice").hidden'),false,'Preview must not save business data.');
+    await evaluate('importLines.lastElementChild.querySelector(".remove-import-line").click()');
+    assert.equal(await evaluate('importLines.children.length'),1);
+    for(const [width,height] of [[1440,1000],[390,844],[320,568],[844,390]]) {
+        await page('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
+        await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+        assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,'Import create page overflow.');
+        let shot=await page('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+        writeFileSync(join(outputDir,`import-create-${width}x${height}.png`),Buffer.from(shot.data,'base64'));
+        await evaluate('xmlReplaceDialog.showModal()');
+        assert.equal(await evaluate('xmlReplaceDialog.scrollWidth<=xmlReplaceDialog.clientWidth && xmlReplaceDialog.scrollHeight<=xmlReplaceDialog.clientHeight+1 && xmlReplaceDialog.querySelector("footer").getBoundingClientRect().bottom<=innerHeight'),true,'XML confirmation must fit small screens.');
+        shot=await page('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+        writeFileSync(join(outputDir,`import-xml-dialog-${width}x${height}.png`),Buffer.from(shot.data,'base64'));
+        await evaluate('xmlReplaceDialog.close()');
+    }
     assert.deepEqual(pageErrors, [], 'Browser errors.');
     assert.deepEqual(failedRequests, [], 'Asset loading errors.');
     assert.equal(postRequests, 0, 'Dashboard sample controls must not submit business data.');
