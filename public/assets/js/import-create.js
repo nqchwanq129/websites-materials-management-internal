@@ -65,7 +65,7 @@ function configureImportSupplier(fill=true) {
 supplierSelect.addEventListener('change',()=>configureImportSupplier());
 function applyImportInvoice(invoice) {
     supplierSelect.value='';
-    for(const key of ['invoice_number','invoice_series','invoice_date','supplier_name','tax_code','address','phone','email','invoice_before_tax','invoice_after_tax']) importCreateForm.elements[key].value=invoice[key] || '';
+    for(const key of ['invoice_number','invoice_series','invoice_date','supplier_name','tax_code','address','phone','email','invoice_before_tax','invoice_tax','invoice_after_tax']) importCreateForm.elements[key].value=invoice[key] || '';
     importCreateForm.elements.receipt_type.value='purchase';
     if(invoice.tax_code) {
         const option=[...supplierSelect.options].find(option=>option.dataset.supplier && JSON.parse(option.dataset.supplier).tax_code===invoice.tax_code);
@@ -90,7 +90,8 @@ xmlInput.addEventListener('change',async()=>{
     try {
         if(file.size>2*1024*1024 || !file.name.toLowerCase().endsWith('.xml'))throw new Error('Chọn file XML tối đa 2 MB.');
         const body=new FormData();body.set('csrf_token',importCreateForm.elements.csrf_token.value);body.set('action','xml');body.set('xml',file);
-        const response=await fetch(importCreateForm.action,{method:'POST',body,headers:{Accept:'application/json'},credentials:'same-origin'});
+        const endpoint=new URL(importCreateForm.getAttribute('action'),document.baseURI).href;
+        const response=await fetch(endpoint,{method:'POST',body,headers:{Accept:'application/json'},credentials:'same-origin'});
         if(!response.headers.get('content-type')?.includes('application/json'))throw new Error('Không nhận được nội dung XML. Hãy kiểm tra phiên đăng nhập và kết nối.');
         const result=await response.json();if(!response.ok || !result.ok)throw new Error(result.message || 'Không đọc được XML.');
         if([...importLines.children].some(row=>{const data=importLineData(row);return data.name || data.code || data.product_id;}) || importCreateForm.elements.invoice_number.value || importCreateForm.elements.supplier_name.value) {

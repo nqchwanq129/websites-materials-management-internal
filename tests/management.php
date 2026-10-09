@@ -400,13 +400,15 @@ try {
     verify($xmlStatus === 200 && json_decode($xmlBody, true)['invoice']['supplier_name'] === 'Seller XML', 'XML endpoint must return parsed preview without writes.');
     $createInput = ['csrf_token' => $csrf, 'action' => 'create', 'warehouse' => $warehouseIds[0], 'number' => 'CREATED-XML', 'received_date' => '2026-10-10',
         'receipt_type' => 'purchase', 'status' => 'confirmed', 'supplier_id' => '', 'supplier_name' => 'Seller XML', 'tax_code' => 'XML-TAX',
-        'invoice_number' => 'XML-001', 'invoice_series' => 'C26T', 'invoice_date' => '2026-10-10', 'invoice_before_tax' => '2.808640', 'invoice_after_tax' => '3.089504',
+        'invoice_number' => 'XML-001', 'invoice_series' => 'C26T', 'invoice_date' => '2026-10-10', 'invoice_before_tax' => '2.808640', 'invoice_tax' => '0.280864', 'invoice_after_tax' => '3.089504',
         'items' => json_encode($parsedInvoice['items'])];
     verify(httpManagement('import-create', array_diff_key($createInput, ['csrf_token' => true]))[0] === 403, 'Receipt create must require CSRF.');
     rejected(fn() => saveManagement($pdo, 'import-create', $targetId, $createInput));
     $beforeCounts = $pdo->query('SELECT (SELECT COUNT(*) FROM products) AS products,(SELECT COUNT(*) FROM suppliers) AS suppliers,(SELECT COUNT(*) FROM import_bill) AS bills')->fetch();
     $badCreate = $createInput; $badCreate['invoice_after_tax'] = '99';
     verify(httpManagement('import-create', $badCreate)[0] === 422, 'Invoice total mismatch must be rejected.');
+    $badTaxCreate = $createInput; $badTaxCreate['invoice_tax'] = '0.28';
+    verify(httpManagement('import-create', $badTaxCreate)[0] === 422, 'XML tax total must match the tax amounts actually saved.');
     verify($pdo->query('SELECT (SELECT COUNT(*) FROM products) AS products,(SELECT COUNT(*) FROM suppliers) AS suppliers,(SELECT COUNT(*) FROM import_bill) AS bills')->fetch() === $beforeCounts, 'Invalid receipt must roll back supplier/product creation.');
     verify(httpManagement('import-create', $createInput)[0] === 200, 'Creating receipt from XML preview failed.');
     $createdBill = array_values(array_filter(loadImports($pdo), static fn($row) => $row['number'] === 'CREATED-XML'))[0];
@@ -417,7 +419,7 @@ try {
     verify(httpManagement('import-create', $duplicateCreate)[0] === 422, 'Duplicate supplier invoice must be rejected.');
     $draftItem = ['product_id' => $createdProduct['id'], 'version' => $createdProduct['version'], 'quantity' => '2', 'unit_price' => '1', 'tax_code' => 'KCT', 'name' => 'Tampered name', 'unit' => 'Tampered unit'];
     $draftCreate = $createInput; $draftCreate['number'] = 'CREATED-DRAFT'; $draftCreate['status'] = 'draft'; $draftCreate['invoice_number'] = '';
-    $draftCreate['invoice_before_tax'] = ''; $draftCreate['invoice_after_tax'] = ''; $draftCreate['items'] = json_encode([$draftItem]);
+    $draftCreate['invoice_before_tax'] = ''; $draftCreate['invoice_tax'] = ''; $draftCreate['invoice_after_tax'] = ''; $draftCreate['items'] = json_encode([$draftItem]);
     verify(httpManagement('import-create', $draftCreate)[0] === 200, 'Existing product draft receipt failed.');
     $draftBill = array_values(array_filter(loadImports($pdo), static fn($row) => $row['number'] === 'CREATED-DRAFT'))[0];
     verify($draftBill['items'][0]['product_name'] === 'XML product' && $draftBill['items'][0]['unit'] === 'Piece', 'Existing product metadata must come from database.');

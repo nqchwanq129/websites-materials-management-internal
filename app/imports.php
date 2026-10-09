@@ -38,7 +38,7 @@ function parseImportXml(string $contents): array
     $result = ['invoice_number' => $text($invoice, 'SHDon'), 'invoice_series' => $text($invoice, 'KHHDon'), 'invoice_date' => $text($invoice, 'NLap'),
         'supplier_name' => $seller ? $text($seller, 'Ten') : '', 'tax_code' => $seller ? $text($seller, 'MST') : '',
         'address' => $seller ? $text($seller, 'DChi') : '', 'phone' => $seller ? $text($seller, 'SDThoai') : '', 'email' => $seller ? $text($seller, 'DCTDTu') : '',
-        'invoice_before_tax' => $text($invoice, 'TgTCThue'), 'invoice_after_tax' => $text($invoice, 'TgTTTBSo'), 'items' => []];
+        'invoice_before_tax' => $text($invoice, 'TgTCThue'), 'invoice_tax' => $text($invoice, 'TgTThue'), 'invoice_after_tax' => $text($invoice, 'TgTTTBSo'), 'items' => []];
     if ($result['invoice_number'] === '' || $result['supplier_name'] === '' || $result['invoice_date'] === '') throw new DomainException('XML thiếu số hóa đơn, ngày hóa đơn hoặc tên bên bán.');
     importDate($result, 'invoice_date');
     $currency = $text($invoice, 'DVTTe');
@@ -151,7 +151,7 @@ function saveImport(PDO $pdo, string $actorId, array $input, array $files = []):
                 'tax_amount' => $taxAmount, 'product_name' => $product['name'], 'unit' => $product['unit'],
                 'specifications' => managementText($item, 'specifications', 16000) ?: ($product['specifications'] ?? null), 'note' => managementText($item, 'note', 16000) ?: null];
         }
-        foreach (['invoice_before_tax' => $beforeTax, 'invoice_after_tax' => $afterTax] as $field => $total) {
+        foreach (['invoice_before_tax' => $beforeTax, 'invoice_tax' => bcsub($afterTax, $beforeTax, 6), 'invoice_after_tax' => $afterTax] as $field => $total) {
             $expected = managementText($input, $field, 32);
             if ($expected !== '' && bccomp(importDecimal($expected), $total, 6) !== 0) throw new DomainException('Tổng các dòng hàng chưa khớp tổng hóa đơn XML. Kiểm tra thành tiền và tiền thuế trước khi lưu.');
         }

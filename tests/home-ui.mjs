@@ -883,6 +883,10 @@ try {
     assert.equal(await evaluate('document.getElementById("import-create-notice").hidden'),false,'Preview must not save business data.');
     await evaluate('importLines.lastElementChild.querySelector(".remove-import-line").click()');
     assert.equal(await evaluate('importLines.children.length'),1);
+    await evaluate(`applyImportInvoice({invoice_number:'00000548',invoice_series:'C26TNA',invoice_date:'2026-09-29',supplier_name:'Test supplier',invoice_before_tax:'2212963',invoice_tax:'177037',invoice_after_tax:'2390000',items:[{product_id:'',code:'',name:'Test kettle',unit:'Cái',category:'other',tracking_mode:'quantity',quantity:'1',unit_price:'2212962.96',amount_before_tax:'2212963',tax_code:'8%',tax_amount:'177037',specifications:'',note:''}]})`);
+    assert.equal(await evaluate('importCreateForm.elements.invoice_tax.value'),'177037');
+    assert.equal(await evaluate('importCreateForm.elements.invoice_number.value'),'00000548');
+    assert.equal(await evaluate('document.getElementById("import-total-after").textContent'),'2.390.000 ₫','Explicit XML line/tax values must preserve the invoice rounding.');
     for(const [width,height] of [[1440,1000],[390,844],[320,568],[844,390]]) {
         await page('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
         await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
@@ -895,6 +899,38 @@ try {
         writeFileSync(join(outputDir,`import-xml-dialog-${width}x${height}.png`),Buffer.from(shot.data,'base64'));
         await evaluate('xmlReplaceDialog.close()');
     }
+    // Exercise the actual file-change handler, including a form control named action.
+    // Stub only the transport so the preview fixture never sends business requests.
+    const uploadCheck=await evaluate(`(async()=>{
+        const previousFetch=window.fetch;
+        const invoice={invoice_number:'00000548',invoice_series:'C26TNA',invoice_date:'2026-09-29',supplier_name:'Test supplier',invoice_before_tax:'2212963',invoice_tax:'177037',invoice_after_tax:'2390000',items:[{product_id:'',code:'',name:'Test kettle',unit:'Cái',category:'other',tracking_mode:'quantity',quantity:'1',unit_price:'2212962.96',amount_before_tax:'2212963',tax_code:'8%',tax_amount:'177037',specifications:'',note:''}]};
+        let request;
+        window.fetch=async(url,options)=>{
+            request={url:String(url),method:options.method,action:options.body.get('action'),file:options.body.get('xml')?.name,csrf:options.body.get('csrf_token')};
+            return new Response(JSON.stringify({ok:true,invoice}),{status:200,headers:{'Content-Type':'application/json'}});
+        };
+        try {
+            importCreateForm.dataset.preview='false';
+            const files=new DataTransfer();files.items.add(new File(['<TDiep/>'],'invoice.xml',{type:'application/xml'}));xmlInput.files=files.files;
+            xmlInput.dispatchEvent(new Event('change',{bubbles:true}));
+            for(let i=0;i<100 && xmlLoading;i++)await new Promise(resolve=>setTimeout(resolve,10));
+            const dialogOpened=xmlReplaceDialog.open;
+            if(dialogOpened){xmlReplaceDialog.returnValue='replace';xmlReplaceDialog.close();await new Promise(resolve=>setTimeout(resolve,20));}
+            return {...request,expectedUrl:new URL(importCreateForm.getAttribute('action'),document.baseURI).href,dialogOpened,
+                errorHidden:importCreateForm.querySelector('[data-form-error]').hidden,invoiceNumber:importCreateForm.elements.invoice_number.value,
+                total:document.getElementById('import-total-after').textContent,inputEnabled:!xmlInput.disabled};
+        } finally {window.fetch=previousFetch;importCreateForm.dataset.preview='true';}
+    })()`);
+    assert.equal(uploadCheck.url,uploadCheck.expectedUrl,'XML upload must use the form action attribute even when an input is named action.');
+    assert.equal(uploadCheck.action,'xml');
+    assert.equal(uploadCheck.method,'POST');
+    assert.equal(uploadCheck.file,'invoice.xml');
+    assert.equal(uploadCheck.csrf.length,64);
+    assert.equal(uploadCheck.dialogOpened,true);
+    assert.equal(uploadCheck.errorHidden,true);
+    assert.equal(uploadCheck.inputEnabled,true);
+    assert.equal(uploadCheck.invoiceNumber,'00000548');
+    assert.equal(uploadCheck.total,'2.390.000 ₫');
     assert.deepEqual(pageErrors, [], 'Browser errors.');
     assert.deepEqual(failedRequests, [], 'Asset loading errors.');
     assert.equal(postRequests, 0, 'Dashboard sample controls must not submit business data.');
