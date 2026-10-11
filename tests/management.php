@@ -6,6 +6,7 @@ require dirname(__DIR__) . '/app/auth.php';
 require dirname(__DIR__) . '/app/management.php';
 require dirname(__DIR__) . '/app/dashboard.php';
 require dirname(__DIR__) . '/app/reports.php';
+require dirname(__DIR__) . '/app/profile.php';
 function verify(bool $value, string $message): void { if (!$value) throw new RuntimeException($message); }
 function rejected(callable $operation): void {
     try { $operation(); } catch (DomainException $error) { return; }
@@ -595,7 +596,89 @@ try {
     verify(httpManagement('reports')[0]===403,'Report HTTP access must enforce admin permission.');
     $pdo->prepare('UPDATE users SET is_super_admin=1 WHERE id=?')->execute([$actorId]);
     $pdo->prepare("UPDATE warehouses SET status='active' WHERE id=?")->execute([$warehouseIds[1]]);
+    // Exercise self-service through actual viewer/keeper sessions in the isolated app.
+    $adminCookie=$cookie;
+    $ownPassword='Own-'.bin2hex(random_bytes(12));
+    $pdo->prepare('UPDATE users SET password_hash=? WHERE id=?')->execute([password_hash($ownPassword,PASSWORD_DEFAULT),$targetId]);
+    $cookie=''; verify(httpManagement('profile')[0]===401,'Guests must not read personal data.');
+    verify(httpManagement('profile',['action'=>'profile'])[0]===401,'Guests must not edit profiles.');
+    $pdo->prepare('DELETE FROM user_warehouses WHERE user_id=?')->execute([$targetId]);
+    foreach(['viewer','keeper'] as $role) {
+        $pdo->prepare('INSERT INTO user_warehouses (user_id,warehouse_id,role) VALUES (?,?,?) ON DUPLICATE KEY UPDATE role=VALUES(role)')->execute([$targetId,$warehouseIds[0],$role]);
+        $cookie=''; [, $body]=httpManagement('login');
+        verify(httpManagement('login',['username'=>$createdUser['username'],'password'=>$ownPassword,'csrf_token'=>tokenFrom($body)])[0]===303,'Ordinary user login failed.');
+        [, $body]=httpManagement('home'); $ownCsrf=tokenFrom($body);
+        [$status,$body]=httpManagement('profile&id='.$actorId); $own=json_decode($body,true,512,JSON_THROW_ON_ERROR)['profile'];
+        verify($status===200 && $own['username']===$createdUser['username'] && $own['editable'] && $own['role']===($role==='keeper'?'Thủ kho':'Người xem'),'Personal reads must always return the session owner and actual role.');
+        verify(!str_contains($body,'password_hash') && !str_contains($body,$ownPassword),'Profile response must not expose password data.');
+        $ownInput=['csrf_token'=>$ownCsrf,'action'=>'profile','version'=>$own['version'],'full_name'=>'Cá nhân '.$role.' <script>','email'=>$role.'@example.com','phone'=>'0901234567'];
+        verify(httpManagement('profile',array_diff_key($ownInput,['csrf_token'=>true]))[0]===403,'Self-service requires CSRF.');
+        $originalAccount=managementSnapshot($pdo,'accounts',$targetId);
+        foreach(['id'=>$actorId,'employee_id'=>$rollbackEmployeeId,'warehouse'=>$warehouseIds[1],'is_super_admin'=>'1','status'=>'locked','username'=>'hacked'] as $key=>$value) {
+            verify(httpManagement('profile',$ownInput+[$key=>$value])[0]===422,'Self-service must reject privileged/tampered fields: '.$key);
+        }
+        foreach(['email'=>'not-an-email','full_name'=>'','phone'=>str_repeat('a',33)] as $key=>$value) verify(httpManagement('profile',array_replace($ownInput,[$key=>$value]))[0]===422,'Invalid personal information accepted.');
+        verify(httpManagement('profile',$ownInput)[0]===200,'Both viewer and keeper must edit their linked personal fields.');
+        verify(managementSnapshot($pdo,'accounts',$targetId)===$originalAccount,'Self-service must preserve username, employee link, state and grants.');
+        $ownEmployee=managementSnapshot($pdo,'employees',$employeeId);
+        verify($ownEmployee['full_name']===$ownInput['full_name'] && $ownEmployee['email']===$ownInput['email'] && $ownEmployee['phone']===$ownInput['phone'] && (string)$ownEmployee['warehouse_id']===$warehouseIds[0],'Personal edits must persist without changing warehouse.');
+        verify(httpManagement('profile',$ownInput)[0]===422,'Stale personal forms must not overwrite updated data.');
+        [, $body]=httpManagement('home'); verify(str_contains($body,htmlspecialchars($ownInput['full_name'],ENT_QUOTES,'UTF-8')),'Shared layout must render updated escaped identity.');
+        $statement=$pdo->prepare('SELECT * FROM audit_logs WHERE user_id=? ORDER BY id DESC LIMIT 1'); $statement->execute([$targetId]); $ownLog=$statement->fetch();
+        verify($ownLog['entity_type']==='employees' && (string)$ownLog['entity_id']===$employeeId && json_decode($ownLog['after_data'],true)['full_name']===$ownInput['full_name'],'Personal changes must be attributed to the owner in audit history.');
+        verify(httpManagement('accounts')[0]===403 && httpManagement('employees')[0]===403,'Self-service must not open admin management routes.');
+    }
+    $otherCookie=$cookie;
+    $cookie=''; [, $body]=httpManagement('login');
+    httpManagement('login',['username'=>$createdUser['username'],'password'=>$ownPassword,'csrf_token'=>tokenFrom($body)]);
+    [, $body]=httpManagement('home'); $ownCsrf=tokenFrom($body);
+    $passwordInput=['csrf_token'=>$ownCsrf,'action'=>'password','current_password'=>$ownPassword,'password'=>'New-'.bin2hex(random_bytes(12))];
+    $passwordInput['password_confirmation']=$passwordInput['password'];
+    foreach(['password_confirmation'=>'different','password'=>'short','current_password'=>'wrong-current'] as $key=>$value) {
+        verify(httpManagement('profile',array_replace($passwordInput,[$key=>$value]))[0]===422,'Invalid password change must fail.');
+    }
+    $samePassword=array_replace($passwordInput,['password'=>$ownPassword,'password_confirmation'=>$ownPassword]);
+    verify(httpManagement('profile',$samePassword)[0]===422,'New password must differ from the current password.');
+    $beforePasswordCookie=$cookie;
+    [$status,$body]=httpManagement('profile',$passwordInput); $passwordResult=json_decode($body,true,512,JSON_THROW_ON_ERROR);
+    verify($status===200 && $cookie!==$beforePasswordCookie && $passwordResult['csrf_token']!==$ownCsrf,'Password changes must rotate session ID and CSRF.');
+    $currentHash=findUser($pdo,'id',$targetId)['password_hash'];
+    verify(password_verify($passwordInput['password'],$currentHash) && !password_verify($ownPassword,$currentHash),'Only the new password must authenticate after change.');
+    verify(httpManagement('profile')[0]===200,'The current session must remain signed in after password change.');
+    verify(httpManagement('profile',$passwordInput)[0]===403,'Old CSRF must stop working after password change.');
+    $newCookie=$cookie; $cookie=$otherCookie;
+    verify(httpManagement('profile')[0]===401 && httpManagement('home')[0]===303,'Other sessions must expire on password change.');
+    $cookie=$newCookie;
+    $statement=$pdo->prepare('SELECT after_data FROM audit_logs WHERE user_id=? AND entity_type=\'users\' ORDER BY id DESC LIMIT 1'); $statement->execute([$targetId]); $passwordAudit=$statement->fetchColumn();
+    verify(json_decode($passwordAudit,true)['password_changed']===true && !str_contains($passwordAudit,$passwordInput['password']) && !str_contains($passwordAudit,$currentHash),'Password auditing must never include secrets or hashes.');
+    $pdo->prepare("UPDATE users SET status='locked' WHERE id=?")->execute([$targetId]);
+    verify(httpManagement('profile')[0]===401,'Locked accounts must lose self-service access immediately.');
+    $pdo->prepare("UPDATE users SET status='active' WHERE id=?")->execute([$targetId]);
+    $cookie=$adminCookie;
+    [$status,$body]=httpManagement('profile'); $unlinked=json_decode($body,true,512,JSON_THROW_ON_ERROR)['profile'];
+    verify($status===200 && !$unlinked['editable'],'Unlinked admin must display profile without inventing employee data.');
+    verify(httpManagement('profile',['csrf_token'=>$csrf,'action'=>'profile','version'=>$unlinked['version'],'full_name'=>'Unlinked','email'=>'','phone'=>''])[0]===422,'Unlinked accounts must not create employee records through self-service.');
     $pdo->exec("CREATE TRIGGER test_audit_failure BEFORE INSERT ON audit_logs FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Test audit failure'");
+    $beforePersonal=managementSnapshot($pdo,'employees',$employeeId);
+    $ownProfile=loadOwnProfile($pdo,$targetId);
+    try {
+        saveOwnProfile($pdo,$targetId,['action'=>'profile','version'=>$ownProfile['version'],'full_name'=>'Must roll back','email'=>'','phone'=>''],'not-used');
+        throw new RuntimeException('Personal edit committed without audit.');
+    } catch(PDOException $error) { verify($error->getCode()==='45000','Unexpected personal audit failure.'); }
+    verify(managementSnapshot($pdo,'employees',$employeeId)===$beforePersonal,'Personal edit must roll back with failed audit.');
+    $ownAddress='profile-check-'.bin2hex(random_bytes(8));
+    $ownRateFile=dirname(__DIR__).'/storage/login-attempts/'.hash('sha256',$ownAddress).'.json';
+    try {
+        $failPassword=['action'=>'password','current_password'=>$passwordInput['password'],'password'=>'Fail-'.bin2hex(random_bytes(12))]; $failPassword['password_confirmation']=$failPassword['password'];
+        try { saveOwnProfile($pdo,$targetId,$failPassword,$ownAddress); throw new RuntimeException('Password committed without audit.'); }
+        catch(PDOException $error) { verify($error->getCode()==='45000','Unexpected password audit failure.'); }
+        verify(findUser($pdo,'id',$targetId)['password_hash']===$currentHash,'Failed audit must preserve the old password hash.');
+        $failPassword['current_password']='wrong-current';
+        for($attempt=0;$attempt<10;$attempt++) rejected(fn()=>saveOwnProfile($pdo,$targetId,$failPassword,$ownAddress));
+        $failPassword['current_password']=$passwordInput['password'];
+        try { saveOwnProfile($pdo,$targetId,$failPassword,$ownAddress); throw new RuntimeException('Password rate limiting failed.'); }
+        catch(DomainException $error) { verify(str_contains($error->getMessage(),'5 phút'),'Password checks must share login rate limiting.'); }
+    } finally { if(is_file($ownRateFile)) unlink($ownRateFile); }
     $rollbackExport=$confirmed; $rollbackExport['number']='ROLLBACK-EXPORT'; $rollbackExport['items']=$transfer['items'];
     $exportFilesBefore=count(glob($testRoot.'/storage/uploads/exports/*.pdf'));
     verify(httpDecisionPdf($rollbackExport,$pdf,'rollback.pdf','export-create')[0]===503,'Export audit failure must abort save.');
@@ -633,7 +716,7 @@ try {
     verify(managementSnapshot($pdo, 'warehouses', $warehouseIds[0]) === $currentWarehouse, 'Warehouse write must roll back when audit fails.');
     verify(httpManagement('employees', ['csrf_token' => $csrf, 'action' => 'delete', 'id' => $rollbackEmployeeId, 'version' => $rollbackEmployee['updated_at']])[0] === 503, 'Deletion must fail when audit insert fails.');
     verify(managementSnapshot($pdo, 'employees', $rollbackEmployeeId) === $rollbackEmployee, 'Audit failure must restore the deleted employee.');
-    echo "PASS: real HTTP management saves, CSRF, permissions, stale writes, import/export lot balances, rounding, paired transfers, five reports reconciled against SQL, PDFs, rollback and atomic audit history.\n";
+    echo "PASS: HTTP management, personal viewer/keeper profiles, password changes/session invalidation, CSRF, permissions, stale writes, stock/transfer/report reconciliation, PDFs and atomic audit rollback.\n";
 } finally {
     if (is_resource($server)) { proc_terminate($server); proc_close($server); }
     $source->exec("USE `$original`");

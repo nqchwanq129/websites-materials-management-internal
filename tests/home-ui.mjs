@@ -81,6 +81,9 @@ try {
     }
     assert.equal(await evaluate('typeof filterReceipts'), 'function', 'Dashboard script failed to load.');
     assert.equal(await evaluate('document.querySelector(".topbar-warehouse").textContent'),'Toàn hệ thống');
+    assert.equal(await evaluate('getComputedStyle(document.querySelector(".topbar-warehouse")).backgroundColor'),'rgb(243, 238, 251)','Warehouse badge must receive the current dashboard CSS.');
+    assert.equal(await evaluate('getComputedStyle(document.getElementById("user-menu-toggle")).display'),'flex','Avatar button must receive the current dashboard CSS.');
+    assert.equal(await evaluate('getComputedStyle(document.getElementById("user-menu")).position'),'fixed','Account menu must receive the current dashboard CSS.');
     assert.equal(await evaluate('document.querySelector(".topbar-warehouse .icon use").getAttribute("href")'),'#i-shield');
     assert.equal(await evaluate('document.querySelector(".topbar-warehouse").title'),'Phạm vi quản trị: Toàn hệ thống');
     assert.equal(await evaluate('document.querySelectorAll("[data-receipt]:not([hidden])").length'), 5);
@@ -1040,6 +1043,92 @@ try {
             }
             const shot=await page('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
             writeFileSync(join(outputDir,`${route}-${width}x${height}.png`),Buffer.from(shot.data,'base64'));
+        }
+    }
+    for (const [label, options] of [['admin',[]],['viewer',['--warehouse-label']],['unlinked',['--unlinked-profile']]]) {
+        const personalRender=spawnSync(php,['tests/home.php','--render',...options],{encoding:'utf8',windowsHide:true});
+        assert.equal(personalRender.status,0,personalRender.stderr);
+        await page('Page.navigate',{url:process.env.LOGIN_URL || 'http://localhost/qlvt-remake/public/'});
+        for(let i=0;i<100;i++) {
+            if(await evaluate('document.readyState === "complete" && Boolean(document.getElementById("login-form"))')) break;
+            await new Promise(resolve=>setTimeout(resolve,100));
+        }
+        const frame=await page('Page.getFrameTree');
+        await page('Page.setDocumentContent',{frameId:frame.frameTree.frame.id,html:personalRender.stdout});
+        for(let i=0;i<100;i++) {
+            if(await evaluate('document.readyState === "complete" && typeof openPersonalDialog === "function"')) break;
+            await new Promise(resolve=>setTimeout(resolve,100));
+        }
+        for(const [width,height] of [[1440,1000],[390,844],[320,568],[844,390]]) {
+            await page('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
+            await evaluate('scrollTo(0,0);document.getElementById("user-menu-toggle").focus();document.getElementById("user-menu-toggle").click()');
+            assert.equal(await evaluate('personalMenu.matches(":popover-open")'),true,'Avatar must open the account menu.');
+            assert.equal(await evaluate('personalMenu.getBoundingClientRect().right<=innerWidth && personalMenu.getBoundingClientRect().bottom<=innerHeight'),true,'Account menu must fit the viewport.');
+            const menuShot=await page('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+            writeFileSync(join(outputDir,`personal-menu-${label}-${width}x${height}.png`),Buffer.from(menuShot.data,'base64'));
+            await evaluate('personalMenu.querySelector("[data-open-profile=profile]").click()');
+            assert.equal(await evaluate('profileDialog.open && !personalMenu.matches(":popover-open")'),true);
+            assert.equal(await evaluate('profileForm.elements.full_name.value'), 'Quản trị viên <script>');
+            assert.equal(await evaluate('profileForm.querySelectorAll("[readonly]").length'),3,'Account identifiers and warehouse must stay read-only.');
+            assert.equal(await evaluate('profileForm.querySelector("[type=submit]").disabled'),label==='unlinked');
+            assert.equal(await evaluate('profileForm.querySelector("[data-profile-unlinked]").hidden'),label!=='unlinked');
+            assert.equal(await evaluate('profileDialog.getBoundingClientRect().width<=600'),true,'Personal popup must use its compact width.');
+            const fixedDialog=`(() => {
+                const dialog=document.querySelector('dialog[open]'),body=dialog.querySelector('.account-dialog-body'),header=dialog.querySelector('header'),footer=dialog.querySelector('footer');
+                const before=[header.getBoundingClientRect().top,footer.getBoundingClientRect().top];body.scrollTop=body.scrollHeight;
+                return before[0]===header.getBoundingClientRect().top && before[1]===footer.getBoundingClientRect().top
+                    && dialog.scrollWidth<=dialog.clientWidth && dialog.scrollHeight<=dialog.clientHeight+1 && footer.getBoundingClientRect().bottom<=innerHeight;
+            })()`;
+            assert.equal(await evaluate(fixedDialog),true,'Personal dialog header/footer must remain fixed; only body may scroll.');
+            await evaluate('profileDialog.querySelector(".account-dialog-body").scrollTop=0');
+            const shot=await page('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+            writeFileSync(join(outputDir,`personal-profile-${label}-${width}x${height}.png`),Buffer.from(shot.data,'base64'));
+            await evaluate('profileForm.querySelector("[data-close-personal]").click();openPersonalDialog("password")');
+            assert.equal(await evaluate('passwordDialog.open'),true);
+            assert.equal(await evaluate("getComputedStyle(passwordForm.querySelector('.personal-password-grid')).gridTemplateColumns.split(' ').length"),1,'Password fields must stack in one column.');
+            await evaluate('passwordForm.elements.current_password.value="Current-example";passwordForm.elements.password.value="New-password-example";passwordForm.elements.password_confirmation.value="different-password";passwordForm.requestSubmit()');
+            assert.equal(await evaluate('passwordForm.elements.password_confirmation.validity.customError'),true,'Password confirmation must be checked.');
+            await evaluate('passwordForm.querySelector("[data-personal-password-toggle]").click()');
+            assert.equal(await evaluate('passwordForm.elements.current_password.type'),'text','Password visibility must toggle.');
+            assert.equal(await evaluate(fixedDialog),true,'Password dialog must preserve fixed header/footer.');
+            await evaluate('passwordDialog.querySelector(".account-dialog-body").scrollTop=0');
+            const passwordShot=await page('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+            writeFileSync(join(outputDir,`personal-password-${label}-${width}x${height}.png`),Buffer.from(passwordShot.data,'base64'));
+            await page('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+            await page('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+            await evaluate('new Promise(resolve=>setTimeout(resolve,30))');
+            assert.equal(await evaluate('passwordDialog.open'),false,'Escape must close the dialog.');
+            assert.equal(await evaluate('[...passwordForm.querySelectorAll("input[autocomplete$=password]")].every(input=>input.value==="" && input.type==="password")'),true,'Closing must clear all passwords and reset visibility.');
+            await evaluate('openPersonalDialog("password");passwordForm.elements.current_password.value="Current-example";passwordForm.elements.password.value="New-password-example";passwordForm.elements.password_confirmation.value="New-password-example";passwordForm.requestSubmit()');
+            assert.equal(await evaluate('passwordDialog.open'),false,'Valid preview must close without writing data.');
+            assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,'Personal controls must not cause horizontal overflow.');
+        }
+        if(label==='admin') {
+            await evaluate(`const personalNativeFetch=window.fetch; let personalMockState=JSON.parse(document.getElementById('own-profile-preview').textContent); let personalMockFailure=false; const personalPayloads=[];
+                window.fetch=async(url,options={})=>{
+                    if(options.method==='POST') personalPayloads.push(Object.fromEntries(options.body.entries()));
+                    if(personalMockFailure) return new Response(JSON.stringify({ok:false,message:'Phiên đăng nhập đã hết hạn.'}),{status:401,headers:{'Content-Type':'application/json'}});
+                    if(options.method==='POST' && options.body.get('action')==='profile') personalMockState={...personalMockState,full_name:options.body.get('full_name')};
+                    const token=options.body?.get('action')==='password'?'c'.repeat(64):'b'.repeat(64);
+                    return new Response(JSON.stringify({ok:true,message:'Đã lưu.',csrf_token:token,profile:personalMockState}),{headers:{'Content-Type':'application/json'}});
+                };
+                profileForm.dataset.preview='false';passwordForm.dataset.preview='false';`);
+            await evaluate('openPersonalDialog("profile")');
+            await evaluate('profileForm.elements.full_name.value="Tên mới <script>";profileForm.requestSubmit()');
+            await evaluate('new Promise(resolve=>setTimeout(resolve,50))');
+            assert.equal(await evaluate('profileDialog.open'),false,'Successful live response must close the editor.');
+            assert.equal(await evaluate('[...document.querySelectorAll("[data-user-name]")].every(element=>element.textContent==="Tên mới <script>" && !element.querySelector("script"))'),true,'Saved identity must update immediately and remain text.');
+            assert.equal(await evaluate('personalPayloads[0].full_name'),'Tên mới <script>');
+            assert.equal(await evaluate('Object.keys(personalPayloads[0]).sort().join(",")'),'action,csrf_token,email,full_name,phone,version','Only editable fields should be submitted.');
+            await evaluate('openPersonalDialog("password");passwordForm.elements.current_password.value="Current-example";passwordForm.elements.password.value="New-password-example";passwordForm.elements.password_confirmation.value="New-password-example";passwordForm.requestSubmit()');
+            await evaluate('new Promise(resolve=>setTimeout(resolve,50))');
+            assert.equal(await evaluate('[...document.querySelectorAll("input[name=csrf_token]")].every(input=>input.value==="c".repeat(64))'),true,'New CSRF must update every form, including logout.');
+            assert.equal(await evaluate('passwordDialog.open'),false);
+            await evaluate('personalMockFailure=true;openPersonalDialog("password");passwordForm.elements.current_password.value="Current-example";passwordForm.elements.password.value="New-password-example";passwordForm.elements.password_confirmation.value="New-password-example";passwordForm.requestSubmit()');
+            await evaluate('new Promise(resolve=>setTimeout(resolve,50))');
+            assert.equal(await evaluate('passwordDialog.open && !passwordForm.querySelector("[data-profile-login]").hidden && !passwordForm.querySelector("[data-form-error]").hidden && !passwordForm.querySelector("[type=submit]").disabled'),true,'Expired sessions must show login guidance and release saving controls.');
+            assert.equal(await evaluate('[...passwordForm.querySelectorAll("input[type=password]")].every(input=>input.value==="")'),true,'Failed password requests must clear secrets.');
+            await evaluate('passwordDialog.close();window.fetch=personalNativeFetch');
         }
     }
     assert.deepEqual(pageErrors, [], 'Browser errors.');

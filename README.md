@@ -164,6 +164,18 @@ Decision list: `index.php?page=decisions` reads real database records (super adm
 
 Decision PDF attachments use the existing `attachments` table (`decision_id`, `original_name`, `storage_path`, `mime_type`, `created_by`); no schema change is needed. Upload one PDF per save (maximum 2 MiB), with server-side extension, MIME and signature validation. Files are appended to existing attachments and stored with random names in `storage/uploads/decisions/`, outside the public directory and excluded from Git. Download through `index.php?page=decision-file&id=...` requires an active super-admin session. Back up both the database and `storage/uploads/`; a source-code commit does not contain uploaded documents. Failed database/audit writes roll back metadata and remove the newly uploaded file.
 
+## Personal account
+
+The avatar at the right of the shared topbar opens a native account popover with personal information, change password and logout. Super admins, warehouse keepers and viewers can use it from any signed-in page. Both dialogs keep the heading and actions fixed while only the body scrolls; contact fields use two columns on desktop and one on mobile. Password fields support visibility toggles and are cleared when the dialog closes or a request finishes.
+
+`index.php?page=profile` reads/updates only the session owner's information. Full name, email and phone belong to the linked employee record; username, employee code, warehouse, employee link, state and grants remain under administrator management. An unlinked account shows its existing identity and a read-only profile with an explanation; it can still change its password. No schema change, upload library or new dependency is required.
+
+Self-service uses the same validation and write-lock order as management, requires CSRF and an active account/employee, rejects additional fields and detects stale profile forms. Changed fields and audit history commit together. Password changes verify the current password with the existing login rate limiter, reject reuse and confirmation mismatches, and hash the new password with PHP. Password audit records contain only a change flag, never secrets or hashes. No-op profile saves add no audit record.
+
+Sessions bind to the account password hash fingerprint. A successful password change rotates the current session ID/CSRF, updates the tokens in forms on the page and preserves that session; other sessions expire on their next request. Sessions created before this feature need to sign in again once. Administrator password resets also invalidate existing sessions. The current session fingerprint comes from the committed new hash, rather than an unlocked follow-up read.
+
+Checks: `php tests/management.php` covers real viewer/keeper HTTP edits in an isolated database, ownership, tampered fields, CSRF, stale data, validation, session rotation/invalidation, rate limiting, audit secrecy and rollback. `php tests/auth.php` covers authentication regressions. `node tests/home-ui.mjs` covers popover/dialogs, responsive layout, fixed actions, confirmation/visibility, clearing passwords, Escape and fixture-only previews without writes.
+
 ## Reports
 
 `index.php?page=reports&kind=inventory` provides five live reports: inventory, materials, parts, tools and fixed assets. `loadReportData()` in `app/reports.php` reads the MySQL catalogue, warehouses, confirmed receipt headers/details, decisions and account roles in one consistent transaction. Access remains super-admin only; errors never fall back to sample data. Sample ledgers exist only in `tests/fixtures/reports.php`. No schema change or sample business inserts are required.

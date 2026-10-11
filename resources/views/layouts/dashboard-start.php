@@ -1,4 +1,5 @@
 <?php
+$assetUrl = static fn(string $path): string => $path . '?v=' . substr(hash_file('sha256', dirname(__DIR__, 3) . '/public/' . $path), 0, 12);
 $displayName = $user['full_name'] ?? $user['username'];
 $topbarWarehouse = (int)$user['is_super_admin'] === 1 ? 'Toàn hệ thống' : ($user['employee_warehouse_name'] ?? 'Chưa gán kho');
 $topbarWarehouseHint = ((int)$user['is_super_admin'] === 1 ? 'Phạm vi quản trị: ' : 'Kho của bạn: ') . $topbarWarehouse;
@@ -45,20 +46,22 @@ $openGroup = ['exports' => 'Phiếu xuất kho', 'export-create' => 'Phiếu xu�
     <meta name="theme-color" content="#29235c">
     <title><?= escapeHtml($pageTitle) ?> · Quản lý vật tư VISHIPEL</title>
     <link rel="icon" href="assets/images/company-logo.png" type="image/png">
-    <link rel="stylesheet" href="assets/css/dashboard.css">
-    <link rel="stylesheet" href="assets/vendor/simple-notify/simple-notify.css">
-    <link rel="stylesheet" href="assets/css/notifications.css">
-    <script src="assets/vendor/simple-notify/simple-notify.min.js" defer></script>
-    <script src="assets/js/dashboard.js" defer></script>
-    <?php if (in_array($activePage, ['import-create', 'export-create'], true)): ?><script src="assets/js/receipt-decimal.js" defer></script><?php endif; ?>
+    <link rel="stylesheet" href="<?= $assetUrl('assets/css/dashboard.css') ?>">
+    <link rel="stylesheet" href="<?= $assetUrl('assets/vendor/simple-notify/simple-notify.css') ?>">
+    <link rel="stylesheet" href="<?= $assetUrl('assets/css/notifications.css') ?>">
+    <script src="<?= $assetUrl('assets/vendor/simple-notify/simple-notify.min.js') ?>" defer></script>
+    <script src="<?= $assetUrl('assets/js/dashboard.js') ?>" defer></script>
+    <link rel="stylesheet" href="<?= $assetUrl('assets/css/accounts.css') ?>">
+    <script src="<?= $assetUrl('assets/js/profile.js') ?>" defer></script>
+    <?php if (in_array($activePage, ['import-create', 'export-create'], true)): ?><script src="<?= $assetUrl('assets/js/receipt-decimal.js') ?>" defer></script><?php endif; ?>
     <?php $isProductPage = in_array($activePage, ['products', 'materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products'], true); ?>
-    <?php if ($isProductPage || in_array($activePage, ['export-create', 'exports', 'import-create', 'imports', 'accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'audit'], true)): ?><link rel="stylesheet" href="assets/css/accounts.css"><script src="assets/js/<?= $isProductPage ? 'products' : $activePage ?>.js" defer></script><?php endif; ?>
-    <?php if (in_array($activePage, ['import-create', 'export-create'], true)): ?><link rel="stylesheet" href="assets/css/import-create.css"><?php endif; ?>
-    <?php if ($isProductPage || in_array($activePage, ['exports', 'imports', 'suppliers', 'decisions'], true)): ?><link rel="stylesheet" href="assets/css/audit.css"><?php endif; ?>
-    <?php if ($isProductPage): ?><link rel="stylesheet" href="assets/css/products.css"><?php endif; ?>
-    <?php if ($activePage === 'decisions'): ?><link rel="stylesheet" href="assets/css/decisions.css"><?php endif; ?>
-    <?php if ($activePage === 'reports'): ?><link rel="stylesheet" href="assets/css/accounts.css"><link rel="stylesheet" href="assets/css/reports.css"><script src="assets/vendor/sheetjs/xlsx.mini.min.js" defer></script><script src="assets/js/reports.js" defer></script><?php endif; ?>
-    <?php if ($activePage === 'audit'): ?><link rel="stylesheet" href="assets/css/audit.css"><?php endif; ?>
+    <?php if ($isProductPage || in_array($activePage, ['export-create', 'exports', 'import-create', 'imports', 'accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'audit'], true)): ?><script src="<?= $assetUrl('assets/js/' . ($isProductPage ? 'products' : $activePage) . '.js') ?>" defer></script><?php endif; ?>
+    <?php if (in_array($activePage, ['import-create', 'export-create'], true)): ?><link rel="stylesheet" href="<?= $assetUrl('assets/css/import-create.css') ?>"><?php endif; ?>
+    <?php if ($isProductPage || in_array($activePage, ['exports', 'imports', 'suppliers', 'decisions'], true)): ?><link rel="stylesheet" href="<?= $assetUrl('assets/css/audit.css') ?>"><?php endif; ?>
+    <?php if ($isProductPage): ?><link rel="stylesheet" href="<?= $assetUrl('assets/css/products.css') ?>"><?php endif; ?>
+    <?php if ($activePage === 'decisions'): ?><link rel="stylesheet" href="<?= $assetUrl('assets/css/decisions.css') ?>"><?php endif; ?>
+    <?php if ($activePage === 'reports'): ?><link rel="stylesheet" href="<?= $assetUrl('assets/css/reports.css') ?>"><script src="<?= $assetUrl('assets/vendor/sheetjs/xlsx.mini.min.js') ?>" defer></script><script src="<?= $assetUrl('assets/js/reports.js') ?>" defer></script><?php endif; ?>
+    <?php if ($activePage === 'audit'): ?><link rel="stylesheet" href="<?= $assetUrl('assets/css/audit.css') ?>"><?php endif; ?>
 </head>
 <body>
 <svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -84,9 +87,9 @@ $openGroup = ['exports' => 'Phiếu xuất kho', 'export-create' => 'Phiếu xu�
         <?php endforeach; ?>
         <p class="nav-empty" role="status" hidden>Không tìm thấy chức năng phù hợp.</p>
         </nav>
-        <div class="sidebar-bottom"><button class="nav-item" type="button" data-feature="Hướng dẫn sử dụng"><?= $icon('help') ?>Hướng dẫn sử dụng</button><div class="sidebar-account"><span class="avatar"><?= escapeHtml(mb_strtoupper(mb_substr($displayName, 0, 1))) ?></span><div><strong><?= escapeHtml($displayName) ?></strong><small><?= (int) $user['is_super_admin'] === 1 ? 'Quản trị viên' : 'Nhân viên' ?></small></div><form action="index.php?page=logout" method="post"><input type="hidden" name="csrf_token" value="<?= escapeHtml($_SESSION['csrf_token']) ?>"><button class="icon-button" type="submit" aria-label="Đăng xuất" title="Đăng xuất"><?= $icon('logout') ?></button></form></div></div>
+        <div class="sidebar-bottom"><button class="nav-item" type="button" data-feature="Hướng dẫn sử dụng"><?= $icon('help') ?>Hướng dẫn sử dụng</button><div class="sidebar-account"><span class="avatar" data-user-initial><?= escapeHtml(mb_strtoupper(mb_substr($displayName, 0, 1))) ?></span><div><strong data-user-name><?= escapeHtml($displayName) ?></strong><small><?= (int) $user['is_super_admin'] === 1 ? 'Quản trị viên' : 'Nhân viên' ?></small></div><form action="index.php?page=logout" method="post"><input type="hidden" name="csrf_token" value="<?= escapeHtml($_SESSION['csrf_token']) ?>"><button class="icon-button" type="submit" aria-label="Đăng xuất" title="Đăng xuất"><?= $icon('logout') ?></button></form></div></div>
     </aside>
     <button class="menu-backdrop" type="button" aria-label="Đóng menu" hidden></button>
     <div class="content-shell">
-        <header class="topbar"><div class="breadcrumb"><button id="menu-toggle" class="icon-button" type="button" aria-controls="sidebar" aria-expanded="false" aria-label="Mở menu"><?= $icon('menu') ?></button><span>Không gian làm việc</span><span class="breadcrumb-divider">/</span><strong><?= escapeHtml($pageTitle) ?></strong></div><div class="topbar-right"><span class="internal-badge topbar-warehouse" title="<?= escapeHtml($topbarWarehouseHint) ?>"><?= $icon((int)$user['is_super_admin'] === 1 ? 'shield' : 'warehouse') ?><span class="topbar-warehouse-text"><?= escapeHtml($topbarWarehouse) ?></span></span><span class="avatar avatar-small"><?= escapeHtml(mb_strtoupper(mb_substr($displayName, 0, 1))) ?></span></div></header>
+        <header class="topbar"><div class="breadcrumb"><button id="menu-toggle" class="icon-button" type="button" aria-controls="sidebar" aria-expanded="false" aria-label="Mở menu"><?= $icon('menu') ?></button><span>Không gian làm việc</span><span class="breadcrumb-divider">/</span><strong><?= escapeHtml($pageTitle) ?></strong></div><div class="topbar-right"><span class="internal-badge topbar-warehouse" title="<?= escapeHtml($topbarWarehouseHint) ?>"><?= $icon((int)$user['is_super_admin'] === 1 ? 'shield' : 'warehouse') ?><span class="topbar-warehouse-text"><?= escapeHtml($topbarWarehouse) ?></span></span><button id="user-menu-toggle" class="user-menu-toggle" type="button" popovertarget="user-menu" aria-label="Tài khoản của tôi" title="Tài khoản của tôi"><span class="avatar avatar-small" data-user-initial><?= escapeHtml(mb_strtoupper(mb_substr($displayName, 0, 1))) ?></span><?= $icon('chevron') ?></button></div></header>
         <main id="main-content" tabindex="-1">

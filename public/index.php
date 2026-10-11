@@ -5,7 +5,7 @@ require dirname(__DIR__) . '/app/bootstrap.php';
 
 $page = is_string($_GET['page'] ?? null) ? $_GET['page'] : 'login';
 $method = $_SERVER['REQUEST_METHOD'];
-if (!in_array($page, ['login', 'home', 'exports', 'export-create', 'export-file', 'imports', 'import-create', 'import-file', 'products', 'materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products', 'accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'decision-file', 'reports', 'audit', 'logout'], true)) {
+if (!in_array($page, ['login', 'home', 'profile', 'exports', 'export-create', 'export-file', 'imports', 'import-create', 'import-file', 'products', 'materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products', 'accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'decision-file', 'reports', 'audit', 'logout'], true)) {
     http_response_code(404);
     exit('Trang không tồn tại.');
 }
@@ -36,7 +36,7 @@ if ($page === 'login' && $method === 'POST') {
         }
         $user = authenticateUser(connectDatabase(), $username, $password, $_SERVER['REMOTE_ADDR']);
         session_regenerate_id(true);
-        $_SESSION = ['user_id' => $user['id'], 'csrf_token' => bin2hex(random_bytes(32)), 'last_activity' => time()];
+        $_SESSION = ['user_id' => $user['id'], 'csrf_token' => bin2hex(random_bytes(32)), 'last_activity' => time(), 'password_version' => $user['password_version']];
         redirectTo('home');
     } catch (DomainException $error) {
         $_SESSION['login_error'] = $error->getMessage();
@@ -52,6 +52,10 @@ if (isset($_SESSION['user_id'])) {
     try {
         if (time() - ($_SESSION['last_activity'] ?? 0) < 1800) {
             $user = findUser(connectDatabase(), 'id', $_SESSION['user_id']);
+            if ($user !== null) {
+                $passwordVersion = hash('sha256', $user['password_hash']);
+                if (!isset($_SESSION['password_version']) || !hash_equals($_SESSION['password_version'], $passwordVersion)) $user = null;
+            }
         }
         if (!userCanSignIn($user)) {
             unset($_SESSION['user_id'], $_SESSION['last_activity']);
@@ -65,6 +69,21 @@ if (isset($_SESSION['user_id'])) {
         http_response_code(503);
         exit('Hệ thống tạm thời không khả dụng. Vui lòng thử lại sau.');
     }
+}
+if ($page === 'profile') {
+    if ($user === null) respondJson(['ok'=>false,'message'=>'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.'],401);
+    if ($method === 'POST' && !validCsrfToken()) respondJson(['ok'=>false,'message'=>'Phiên xác nhận không hợp lệ. Hãy tải lại trang.'],403);
+    try {
+        if ($method === 'GET') respondJson(['ok'=>true,'profile'=>loadOwnProfile(connectDatabase(),(string)$user['id'])]);
+        $saved = saveOwnProfile(connectDatabase(),(string)$user['id'],$_POST,$_SERVER['REMOTE_ADDR']);
+        if (($_POST['action'] ?? '') === 'password') {
+            session_regenerate_id(true);
+            $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+            $_SESSION['password_version'] = $saved['password_version'];
+        }
+        respondJson(['ok'=>true,'message'=>$saved['message'],'csrf_token'=>$_SESSION['csrf_token'],'profile'=>loadOwnProfile(connectDatabase(),(string)$user['id'])]);
+    } catch (DomainException $error) { respondJson(['ok'=>false,'message'=>$error->getMessage()],422); }
+    catch (Throwable $error) { error_log('QLVT profile: '.$error->getMessage()); respondJson(['ok'=>false,'message'=>'Không thể cập nhật lúc này. Vui lòng tải lại trang và kiểm tra trước khi thử lại.'],503); }
 }
 if (in_array($page, ['home', 'exports', 'export-create', 'export-file', 'imports', 'import-create', 'import-file', 'products', 'materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products', 'accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'decision-file', 'reports', 'audit'], true)) {
     if ($user === null) {

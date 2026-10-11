@@ -32,7 +32,7 @@ function warehousePermission(PDO $pdo, string $userId, string $warehouseId): ?st
     return $statement->fetchColumn() ?: null;
 }
 
-function authenticateUser(PDO $pdo, string $username, string $password, string $address): array
+function authenticateUser(PDO $pdo, string $username, string $password, string $address, bool $rehash = true): array
 {
     $directory = dirname(__DIR__) . '/storage/login-attempts';
     if (!is_dir($directory) && !mkdir($directory, 0700, true) && !is_dir($directory)) {
@@ -58,10 +58,13 @@ function authenticateUser(PDO $pdo, string $username, string $password, string $
             throw new RuntimeException('Cannot save login attempts.');
         }
         if (!$allowed) throw new DomainException('Tên đăng nhập hoặc mật khẩu không đúng, hoặc tài khoản chưa được phép truy cập.');
-        if (password_needs_rehash($user['password_hash'], PASSWORD_DEFAULT)) {
+        if ($rehash && password_needs_rehash($user['password_hash'], PASSWORD_DEFAULT)) {
             $statement = $pdo->prepare('UPDATE users SET password_hash = ? WHERE id = ? AND password_hash = ?');
-            $statement->execute([password_hash($password, PASSWORD_DEFAULT), $user['id'], $user['password_hash']]);
+            $newHash = password_hash($password, PASSWORD_DEFAULT);
+            $statement->execute([$newHash, $user['id'], $user['password_hash']]);
+            if ($statement->rowCount() === 1) $user['password_hash'] = $newHash;
         }
+        $user['password_version'] = hash('sha256', $user['password_hash']);
         unset($user['password_hash']);
         return $user;
     } finally {

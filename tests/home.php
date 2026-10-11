@@ -14,6 +14,8 @@ foreach (array_merge(['export-create', 'exports', 'import-create', 'imports', 'p
 $sampleRows = ['dashboard' => ['data-receipt ', 5], 'import-create' => ['id="import-create-form"', 1], 'imports' => ['data-import="', 12], 'products' => ['data-product="', 12], 'accounts' => ['data-account="', 6],
     'employees' => ['data-employee="', 12], 'warehouses' => ['data-warehouse="', 12], 'suppliers' => ['data-supplier="', 12], 'decisions' => ['data-decision="', 12], 'reports' => ['data-report-row>', 60], 'audit' => ['data-audit="', 14]];
 $previewOnly = true;
+$ownProfilePreview = ['username'=>$user['username'],'full_name'=>$user['full_name'],'email'=>'preview@example.com','phone'=>'0901234567','code'=>'NV-001',
+    'warehouse'=>$user['employee_warehouse_name'],'role'=>$user['is_super_admin']?'Quản trị viên':'Người xem','editable'=>!in_array('--unlinked-profile',$argv,true),'version'=>'preview'];
 $sampleRows['exports'] = ['data-export="', 12]; $sampleRows['export-create'] = ['id="export-create-form"', 1];
 foreach ($productPages as $productPage => $count) $sampleRows[$productPage] = ['data-product="', $count];
 if ($preview === 'reports') {
@@ -33,6 +35,12 @@ if ($preview === 'reports') {
 ob_start();
 require dirname(__DIR__) . '/resources/views/' . ($preview === 'dashboard' ? 'dashboard/home.php' : $preview . '/index.php');
 $html = ob_get_clean();
+preg_match_all('/(?:href|src)="(assets\/[^"?]+\.(?:css|js))(\?v=[a-f0-9]{12})?"/', $html, $assets, PREG_SET_ORDER);
+foreach ($assets as $asset) {
+    if (($asset[2] ?? '') !== '?v=' . substr(hash_file('sha256', dirname(__DIR__) . '/public/' . $asset[1]), 0, 12)) {
+        throw new RuntimeException('CSS/JavaScript must use a content version to avoid stale browser caches: ' . $asset[1]);
+    }
+}
 if(!str_contains($html,'title="'.escapeHtml($user['is_super_admin']?'Phạm vi quản trị: Toàn hệ thống':'Kho của bạn: '.$user['employee_warehouse_name']).'"')) throw new RuntimeException('Topbar warehouse label or escaping failed.');
 if (str_contains($html, 'Quản trị viên <script>') || !str_contains($html, 'Quản trị viên &lt;script&gt;')
     || substr_count($html, $sampleRows[$preview][0]) !== $sampleRows[$preview][1]

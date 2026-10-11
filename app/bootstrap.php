@@ -4,6 +4,7 @@ declare(strict_types=1);
 require_once dirname(__DIR__) . '/config/database.php';
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/management.php';
+require_once __DIR__ . '/profile.php';
 
 header('Content-Type: text/html; charset=utf-8');
 header('Cache-Control: no-store');
