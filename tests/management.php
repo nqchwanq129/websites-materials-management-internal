@@ -5,6 +5,7 @@ require dirname(__DIR__) . '/config/database.php';
 require dirname(__DIR__) . '/app/auth.php';
 require dirname(__DIR__) . '/app/management.php';
 require dirname(__DIR__) . '/app/dashboard.php';
+require dirname(__DIR__) . '/app/reports.php';
 function verify(bool $value, string $message): void { if (!$value) throw new RuntimeException($message); }
 function rejected(callable $operation): void {
     try { $operation(); } catch (DomainException $error) { return; }
@@ -544,6 +545,56 @@ try {
     $pdo->prepare('UPDATE users SET is_super_admin=0 WHERE id=?')->execute([$actorId]);
     [, $body]=httpManagement('home'); verify(!str_contains($body,'data-receipt ') && !str_contains($body,'class="heading-actions"'),'Ordinary account without grants must see no receipts or create shortcuts.');
     $pdo->prepare('UPDATE users SET is_super_admin=1 WHERE id=?')->execute([$actorId]);
+    // Report checks use this isolated database, never insert sample business data into production.
+    rejected(fn()=>loadReportData($pdo,$targetId));
+    $pdo->prepare("INSERT INTO import_bill (warehouse_id,number,received_date,receipt_type,status,total_before_tax) VALUES (?,'REPORT-CATEGORIES','2026-10-01','opening','confirmed',24)")->execute([$warehouseIds[0]]);
+    $reportBillId=$pdo->lastInsertId();
+    foreach($pdo->query("SELECT id,name,unit FROM products WHERE code IN ('PAGE-materials','PAGE-spare-parts','PAGE-tools','PAGE-fixed-assets')") as $record) {
+        $pdo->prepare('INSERT INTO import_bill_details (import_bill_id,product_id,received_quantity,product_name,unit,unit_price,amount_before_tax) VALUES (?,?,2,?,?,3,6)')->execute([$reportBillId,$record['id'],$record['name'],$record['unit']]);
+    }
+    $pdo->prepare("INSERT INTO user_warehouses (user_id,warehouse_id,role) VALUES (?,?,'keeper')")->execute([$targetId,$warehouseIds[1]]);
+    $pdo->prepare("UPDATE warehouses SET status='inactive' WHERE id=?")->execute([$warehouseIds[1]]);
+    $ledger=loadReportData($pdo,$actorId);
+    verify(array_sum($ledger['accounts'])===(int)$pdo->query('SELECT COUNT(*) FROM users')->fetchColumn(),'Multi-warehouse grants must not duplicate accounts.');
+    verify(isset($ledger['warehouses'][$warehouseIds[1]]) && isset($ledger['products'][$productId]),'Historical reports must retain inactive warehouses and products.');
+    foreach($ledger['movements'] as $movement) verify($movement['status']==='confirmed','Unconfirmed receipts must not enter report data.');
+    $reportInputs=['from'=>'2026-10-01','to'=>'2026-10-31'];
+    $liveReport=buildReport($ledger,reportFilters($reportInputs,$ledger));
+    foreach($liveReport['rows'] as $row) {
+        $expectedValue='0'; $expectedQuantity='0'; $quantityUnknown=false;
+        foreach(['import'=>['import_bill','import_bill_details','import_bill_id','received_date','received_quantity'],
+            'export'=>['export_bill','export_bill_details','export_bill_id','issued_date','issued_quantity']] as $direction=>[$table,$detailTable,$billColumn,$dateColumn,$quantityColumn]) {
+            $statement=$pdo->prepare("SELECT COALESCE(SUM(d.amount_before_tax),0) AS value,COALESCE(SUM(d.$quantityColumn),0) AS quantity,
+                COALESCE(SUM(d.$quantityColumn IS NULL OR d.unit IS NULL OR BINARY d.unit<>BINARY ?),0) AS unknown
+                FROM $detailTable d JOIN $table b ON b.id=d.$billColumn WHERE b.status='confirmed' AND b.$dateColumn<=? AND b.warehouse_id=? AND d.product_id=?");
+            $statement->execute([$row['unit'],$reportInputs['to'],$row['warehouse_id'],$row['id']]); $expected=$statement->fetch();
+            $expectedValue=$direction==='import'?bcadd($expectedValue,$expected['value'],6):bcsub($expectedValue,$expected['value'],6);
+            $expectedQuantity=$direction==='import'?bcadd($expectedQuantity,$expected['quantity'],6):bcsub($expectedQuantity,$expected['quantity'],6);
+            $quantityUnknown=$quantityUnknown || (int)$expected['unknown']>0;
+        }
+        verify($row['closing_value']===$expectedValue,'Report value must match independent confirmed-ledger SQL: '.$row['code']);
+        verify($row['closing']===($row['tracking_mode']==='none'||$quantityUnknown?null:$expectedQuantity),'Report quantity must match independent SQL or remain unknown: '.$row['code']);
+    }
+    verify($liveReport['unknown_count']>0 && in_array('untracked',array_column($liveReport['rows'],'stock'),true),'Missing quantities must differ from untracked goods in live reports.');
+    verify(count($liveReport['reconciliation'])>0,'Empty confirmed receipts must be visible for reconciliation.');
+    foreach($liveReport['reconciliation'] as $receipt) verify(!str_starts_with($receipt['number'],'EXPORT-') && !str_starts_with($receipt['number'],'CREATED-') && $receipt['number']!=='REPORT-CATEGORIES','Application-created receipt totals must reconcile.');
+    foreach(array_keys(reportTypes()) as $kind) {
+        $expectedReport=buildReport($ledger,reportFilters($reportInputs+['kind'=>$kind],$ledger));
+        verify(count($expectedReport['rows'])>0,'Each report category must contain its confirmed database fixture.');
+        [$reportStatus,$reportBody]=httpManagement('reports&kind='.$kind.'&from=2026-10-01&to=2026-10-31');
+        preg_match('/<script type="application\/json" id="report-data">(.*?)<\/script>/s',$reportBody,$match);
+        $payload=json_decode($match[1]??'null',true,512,JSON_THROW_ON_ERROR);
+        verify($reportStatus===200 && $payload['preview']===false && $payload['report']===$expectedReport && !str_contains($reportBody,'Dữ liệu mẫu'),'All five report routes must render the same authorized real ledger.');
+    }
+    foreach(['from=2026-02-30','warehouse=999999999','kind=invalid','q[]=bad'] as $invalidFilter) {
+        [$reportStatus,$reportBody]=httpManagement('reports&'.$invalidFilter);
+        verify($reportStatus===422 && str_contains($reportBody,'id="export-report" type="button" disabled') && str_contains($reportBody,'id="print-report" type="button" disabled'),'Invalid report filters must block printing/export instead of exporting different data.');
+    }
+    verify(httpManagement('reports',['csrf_token'=>$csrf])[0]===405,'Reports must not accept database writes.');
+    $pdo->prepare('UPDATE users SET is_super_admin=0 WHERE id=?')->execute([$actorId]);
+    verify(httpManagement('reports')[0]===403,'Report HTTP access must enforce admin permission.');
+    $pdo->prepare('UPDATE users SET is_super_admin=1 WHERE id=?')->execute([$actorId]);
+    $pdo->prepare("UPDATE warehouses SET status='active' WHERE id=?")->execute([$warehouseIds[1]]);
     $pdo->exec("CREATE TRIGGER test_audit_failure BEFORE INSERT ON audit_logs FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Test audit failure'");
     $rollbackExport=$confirmed; $rollbackExport['number']='ROLLBACK-EXPORT'; $rollbackExport['items']=$transfer['items'];
     $exportFilesBefore=count(glob($testRoot.'/storage/uploads/exports/*.pdf'));
@@ -582,7 +633,7 @@ try {
     verify(managementSnapshot($pdo, 'warehouses', $warehouseIds[0]) === $currentWarehouse, 'Warehouse write must roll back when audit fails.');
     verify(httpManagement('employees', ['csrf_token' => $csrf, 'action' => 'delete', 'id' => $rollbackEmployeeId, 'version' => $rollbackEmployee['updated_at']])[0] === 503, 'Deletion must fail when audit insert fails.');
     verify(managementSnapshot($pdo, 'employees', $rollbackEmployeeId) === $rollbackEmployee, 'Audit failure must restore the deleted employee.');
-    echo "PASS: real HTTP management saves, CSRF, permissions, stale writes, import/export lot balances, rounding, paired transfers, PDFs, rollback and atomic audit history.\n";
+    echo "PASS: real HTTP management saves, CSRF, permissions, stale writes, import/export lot balances, rounding, paired transfers, five reports reconciled against SQL, PDFs, rollback and atomic audit history.\n";
 } finally {
     if (is_resource($server)) { proc_terminate($server); proc_close($server); }
     $source->exec("USE `$original`");

@@ -18,10 +18,16 @@ $sampleRows['exports'] = ['data-export="', 12]; $sampleRows['export-create'] = [
 foreach ($productPages as $productPage => $count) $sampleRows[$productPage] = ['data-product="', $count];
 if ($preview === 'reports') {
     require dirname(__DIR__) . '/app/reports.php';
-    $reportData = require dirname(__DIR__) . '/resources/data/reports-preview.php';
+    $reportData = require __DIR__ . '/fixtures/reports.php';
+    if (in_array('--report-checks', $argv, true)) {
+        $reportData['movements'][0]['quantity']=null;
+        $reportData['receipts']=[['id'=>'1','direction'=>'import','number'=>'CHECK-<script>','date'=>$reportData['movements'][0]['date'],
+            'warehouse_id'=>'1','header'=>'10.000001','details'=>'10.000000','line_count'=>1]];
+    }
     $kind = 'inventory';
     foreach ($argv as $argument) if (str_starts_with($argument, '--report-kind=')) $kind = substr($argument, 14);
     $filters = reportFilters(['kind' => $kind], $reportData); $report = buildReport($reportData, $filters); $reportError = '';
+    $previewOnly = !in_array('--live-report', $argv, true);
     $sampleRows['reports'][1] = $kind === 'inventory' ? 60 : 12;
 } else require __DIR__ . '/fixtures/' . (isset($productPages[$preview]) ? 'products' : $preview) . '.php';
 ob_start();
@@ -31,7 +37,7 @@ if(!str_contains($html,'title="'.escapeHtml($user['is_super_admin']?'Phạm vi q
 if (str_contains($html, 'Quản trị viên <script>') || !str_contains($html, 'Quản trị viên &lt;script&gt;')
     || substr_count($html, $sampleRows[$preview][0]) !== $sampleRows[$preview][1]
     || !str_contains($html, 'name="csrf_token"')
-    || !str_contains(mb_strtolower($html), $preview === 'dashboard' ? 'số liệu minh họa' : 'dữ liệu mẫu')) {
+    || !str_contains(mb_strtolower($html), $preview === 'dashboard' ? 'số liệu minh họa' : ($previewOnly ? 'dữ liệu mẫu' : 'dữ liệu thực tế'))) {
     throw new RuntimeException('Dashboard rendering, escaping or sample-data labeling failed.');
 }
-echo in_array('--render', $argv, true) ? $html : 'PASS: ' . $preview . " renders without database, escapes account name, labels sample data and preserves logout CSRF.\n";
+echo in_array('--render', $argv, true) ? $html : 'PASS: ' . $preview . " renders without database, escapes account name, labels data source and preserves logout CSRF.\n";

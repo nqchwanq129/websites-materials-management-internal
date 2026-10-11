@@ -112,9 +112,9 @@ try {
     check(request('index.php?page=products', ['csrf_token' => $logoutToken])[0] === 422, 'Invalid product edit must fail.');
     foreach (['inventory', 'materials', 'parts', 'tools', 'assets'] as $kind) {
         [$reportStatus, $reportBody] = request('index.php?page=reports&kind=' . $kind);
-        check($reportStatus === 200 && str_contains($reportBody, 'Dữ liệu mẫu') && str_contains($reportBody, 'data-report-row'), 'Report sample route failed.');
+        check($reportStatus === 200 && str_contains($reportBody, 'Dữ liệu thực tế') && str_contains($reportBody, 'id="report-data"') && !str_contains($reportBody, 'Dữ liệu mẫu'), 'Real report route failed.');
     }
-    check(request('index.php?page=reports', ['csrf_token' => $logoutToken])[0] === 405, 'Report preview must reject writes.');
+    check(request('index.php?page=reports', ['csrf_token' => $logoutToken])[0] === 405, 'Reports must reject writes.');
     check(request('index.php?page=decisions', ['csrf_token' => $logoutToken])[0] === 422, 'Invalid decision writes must be rejected.');
     check(request('index.php?page=decision-file&id=1')[0] === 404, 'Missing PDF must return 404.');
     check(request('index.php?page=suppliers', ['csrf_token' => $logoutToken])[0] === 405, 'Suppliers must be read-only.');

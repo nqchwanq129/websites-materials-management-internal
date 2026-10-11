@@ -664,8 +664,10 @@ try {
         await evaluate('decisionEditor.close()');
     }
     await send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: outputDir });
-    for (const kind of ['inventory', 'materials', 'parts', 'tools', 'assets']) {
-        const reportRender = spawnSync(php, ['tests/home.php', '--reports', '--report-kind=' + kind, '--render'], { encoding: 'utf8', windowsHide: true });
+    for (const variant of ['inventory', 'materials', 'parts', 'tools', 'assets', 'live']) {
+        const kind = variant === 'live' ? 'inventory' : variant;
+        const live = variant === 'live';
+        const reportRender = spawnSync(php, ['tests/home.php', '--reports', '--report-kind=' + kind, '--render', ...(live ? ['--live-report', '--report-checks'] : [])], { encoding: 'utf8', windowsHide: true });
         assert.equal(reportRender.status, 0, reportRender.stderr);
         await page('Page.navigate', { url: process.env.LOGIN_URL || 'http://localhost/qlvt-remake/public/' });
         for (let i = 0; i < 100; i++) {
@@ -679,6 +681,14 @@ try {
             await new Promise(resolve => setTimeout(resolve, 100));
         }
         const count = kind === 'inventory' ? 60 : 12;
+        assert.equal(await evaluate('reportData.preview'), !live);
+        assert.equal(await evaluate('formatReportNumber(null)'), 'Chưa đủ dữ liệu');
+        assert.equal(await evaluate("formatReportNumber(null,'none')"), 'Không theo dõi');
+        assert.equal(await evaluate("reportDecisionLabel({decision_status:'none'})"), 'Không có quyết định');
+        if (live) {
+            assert.equal(await evaluate("reportData.report.unknown_count===1 && document.querySelector('.report-warning').textContent.includes('1 dòng chưa đủ')"), true);
+            assert.equal(await evaluate("document.querySelector('.report-reconciliation').textContent.includes('CHECK-<script>') && !document.querySelector('.report-reconciliation script')"), true, 'Reconciliation receipt names must be escaped.');
+        }
         assert.equal(await evaluate('document.querySelectorAll("[data-report-row]:not([hidden])").length'), 10);
         assert.equal(await evaluate('document.querySelectorAll(".nav-group[open] .nav-child").length'), 5, 'All report navigation entries must be available.');
         assert.equal(await evaluate('document.querySelector(".nav-child[aria-current=page]").getAttribute("href").endsWith("kind=" + reportData.filters.kind)'), true);
@@ -687,13 +697,13 @@ try {
         assert.equal(await evaluate(`(() => {
             const book=buildReportWorkbook(); const data=XLSX.write(book,{type:'base64',bookType:'xlsx'}); const read=XLSX.read(data,{type:'base64'});
             const rows=XLSX.utils.sheet_to_json(read.Sheets['Bao cao'],{header:1});
-            return rows[1][0].includes('DỮ LIỆU MẪU') && rows.length === ${count + 7} && read.SheetNames.length === 2;
-        })()`), true, 'Excel must include all filtered pages and sample label.');
+            return rows[1][0].includes('${live ? 'DỮ LIỆU THỰC TẾ' : 'DỮ LIỆU MẪU'}') && rows.length === ${count + 7} && read.SheetNames.length === ${live ? 3 : 2};
+        })()`), true, 'Excel must include all filtered pages and correct data source label.');
         assert.equal(await evaluate("reportExcelValue('9007199254740991.123456')"), '9007199254740991.123456', 'Large DECIMAL values must remain text in Excel.');
         if (kind === 'inventory') {
             assert.equal(await evaluate(`(() => { const row=reportData.report.rows[0], name=row.name; row.name='=HYPERLINK("https://example.invalid")'; const cell=buildReportWorkbook().Sheets['Bao cao'].B7; row.name=name; return cell.t==='s' && !cell.f; })()`), true, 'Excel names must remain text, never formulas.');
             await evaluate('document.getElementById("export-report").click()');
-            const filename = await evaluate('`VISHIPEL_MAU_${reportData.filters.kind}_${reportData.filters.from}_${reportData.filters.to}.xlsx`');
+            const filename = await evaluate('`VISHIPEL_${reportData.preview ? "MAU_" : ""}${reportData.filters.kind}_${reportData.filters.from}_${reportData.filters.to}.xlsx`');
             for (let i = 0; i < 50 && !existsSync(join(outputDir, filename)); i++) await new Promise(resolve => setTimeout(resolve, 100));
             assert.equal(existsSync(join(outputDir, filename)), true, 'Excel download did not complete.');
             assert.equal(readFileSync(join(outputDir, filename)).subarray(0, 2).toString(), 'PK', 'Downloaded Excel must be a genuine XLSX ZIP file.');
@@ -704,16 +714,27 @@ try {
             await evaluate('document.querySelector("[data-report-period=quarter]").click()');
             assert.equal(await evaluate('validateReportPeriod()'), true);
             await page('Emulation.setEmulatedMedia', { media: 'print' });
+            await evaluate("window.dispatchEvent(new Event('beforeprint'))");
             assert.equal(await evaluate('[...document.querySelectorAll("[data-report-row]")].every(row=>getComputedStyle(row).display === "table-row")'), true, 'Print must include every page.');
+            if (live) assert.equal(await evaluate("reportReconciliation.open && reportReconciliation.querySelector('tbody').getBoundingClientRect().height>0"), true, 'Print must expose collapsed reconciliation details.');
             await page('Emulation.setEmulatedMedia', { media: '' });
+            await evaluate("window.dispatchEvent(new Event('afterprint'))");
+            if (live) assert.equal(await evaluate('reportReconciliation.open'), false, 'Print must restore the reconciliation section state.');
         }
         for (const [width, height] of [[1440, 1000], [390, 844], [320, 568], [844, 390]]) {
             await page('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
             await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
             assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, `Report ${kind} overflow at ${width}.`);
+            if (live) {
+                await evaluate('reportReconciliation.open=true; reportReconciliation.scrollIntoView({block:"center"})');
+                assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, 'Expanded reconciliation must scroll only its table on narrow screens.');
+                const warningShot = await page('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+                writeFileSync(join(outputDir, `report-checks-${width}x${height}.png`), Buffer.from(warningShot.data, 'base64'));
+                await evaluate('reportReconciliation.open=false; scrollTo(0,0)');
+            }
             assert.equal(await evaluate('[...document.querySelectorAll(".report-money")].every(value => value.scrollWidth <= value.clientWidth)'), true, 'Report totals must fit their cards.');
             const shot = await page('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
-            writeFileSync(join(outputDir, `report-${kind}-${width}x${height}.png`), Buffer.from(shot.data, 'base64'));
+            writeFileSync(join(outputDir, `report-${variant}-${width}x${height}.png`), Buffer.from(shot.data, 'base64'));
             await evaluate('document.querySelector(".report-details").click()');
             assert.equal(await evaluate('document.querySelectorAll("#report-movement-rows tr").length'), 2);
             assert.equal(await evaluate(`(() => {
@@ -723,6 +744,14 @@ try {
                     && reportDialog.scrollWidth<=reportDialog.clientWidth && reportDialog.scrollHeight<=reportDialog.clientHeight+1 && footer.getBoundingClientRect().bottom<=innerHeight;
             })()`), true, 'Report detail header/footer must remain fixed.');
             await evaluate('reportDialog.close()');
+        }
+        if (live) {
+            await evaluate(`reportData.report.unknown_count=1; reportData.report.reconciliation=[{direction:'import',number:'CHECK',date:reportData.filters.from,warehouse_id:'1',header:'10.000001',details:'10.000000',line_count:1}]`);
+            assert.equal(await evaluate(`(() => {
+                const book=buildReportWorkbook(); const data=XLSX.write(book,{type:'base64',bookType:'xlsx'}); const read=XLSX.read(data,{type:'base64'});
+                const rows=XLSX.utils.sheet_to_json(read.Sheets['Doi soat'],{header:1});
+                return rows[4][1]==='CHECK' && rows[4][4]===10.000001 && rows[4][5]===10 && rows[2][0].includes('1 dòng chưa đủ');
+            })()`), true, 'Excel must retain reconciliation and unknown-quantity warnings.');
         }
     }
     const productRender = spawnSync(php, ['tests/home.php', '--products', '--render'], { encoding: 'utf8', windowsHide: true });

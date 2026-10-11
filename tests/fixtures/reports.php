@@ -1,6 +1,6 @@
 <?php
 // Sample business data only; never inserted into MySQL.
-$month = new DateTimeImmutable('first day of this month');
+$month = new DateTimeImmutable('first day of this month',new DateTimeZone('Asia/Ho_Chi_Minh'));
 $warehouses = ['1' => 'Kho trung tâm', '2' => 'Kho Hải Phòng', '3' => 'Kho Đà Nẵng'];
 $names = [
     'consumable' => ['Cáp tín hiệu', 'Dây điện nguồn', 'Dầu bôi trơn', 'Băng keo cách điện'],

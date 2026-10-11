@@ -2,7 +2,7 @@
 declare(strict_types=1);
 require dirname(__DIR__) . '/app/reports.php';
 function ensureReport(bool $value, string $message): void { if (!$value) throw new RuntimeException($message); }
-$data = require dirname(__DIR__) . '/resources/data/reports-preview.php';
+$data = require __DIR__ . '/fixtures/reports.php';
 $filters = reportFilters([], $data); $report = buildReport($data, $filters);
 ensureReport(count($report['rows']) === 60, 'All five categories should be present.');
 $material = array_values(array_filter($report['rows'], fn($row) => $row['id'] === '1'))[0];
@@ -29,4 +29,27 @@ ensureReport(reportNumber('9007199254740991.123456') === '9.007.199.254.740.991,
 $precise['products']['2'] = $precise['products']['1']; $precise['products']['2']['id'] = '2'; $precise['products']['2']['code'] = 'B';
 $precise['movements'][] = array_replace($precise['movements'][0], ['id' => '2', 'product_id' => '2']);
 ensureReport(count(buildReport($precise, reportFilters(['from' => '2026-10-01', 'to' => '2026-10-31'], $precise))['rows']) === 2, 'Same product name must not merge distinct product IDs.');
-echo "PASS: five reports, stock arithmetic, confirmed-only flows, warehouse/category/search filters, untracked quantities, units, dates and exact DECIMAL precision.\n";
+$history=$precise;
+$history['warehouses']['2']='Second warehouse';
+$history['movements']=array_reverse([
+    array_replace($precise['movements'][0],['id'=>'1','unit'=>'Piece','quantity'=>null]),
+    array_replace($precise['movements'][0],['id'=>'2','date'=>'2026-10-01','unit'=>'Piece','quantity'=>'3','unit_price'=>'7','amount_before_tax'=>'21']),
+    array_replace($precise['movements'][0],['id'=>'3','date'=>'2026-10-31','direction'=>'export','unit'=>'Piece','quantity'=>'1','unit_price'=>'99','amount_before_tax'=>'7']),
+    array_replace($precise['movements'][0],['id'=>'4','date'=>'2026-11-01','quantity'=>'9','unit_price'=>'999']),
+    array_replace($precise['movements'][0],['id'=>'5','date'=>'2026-10-31','status'=>'draft','unit_price'=>'999']),
+    array_replace($precise['movements'][0],['id'=>'6','warehouse_id'=>'2','unit'=>'Box','quantity'=>'2']),
+]);
+$history['receipts']=[['id'=>'1','direction'=>'import','number'=>'MISMATCH','date'=>'2026-09-01','warehouse_id'=>'1','header'=>'1.000001','details'=>'1.000000','line_count'=>1],
+    ['id'=>'2','direction'=>'import','number'=>'EMPTY','date'=>'2026-10-01','warehouse_id'=>'1','header'=>'0','details'=>'0','line_count'=>0],
+    ['id'=>'3','direction'=>'import','number'=>'MATCH','date'=>'2026-10-01','warehouse_id'=>'1','header'=>'21','details'=>'21','line_count'=>1],
+    ['id'=>'4','direction'=>'import','number'=>'FUTURE','date'=>'2026-11-01','warehouse_id'=>'1','header'=>'10','details'=>'0','line_count'=>1]];
+$checks=buildReport($history,reportFilters(['from'=>'2026-10-01','to'=>'2026-10-31'],$history));
+ensureReport(count($checks['rows'])===2 && $checks['unknown_count']===2 && !$checks['units'],'Missing quantities or differing units must not yield false stock totals; warehouses must stay separate.');
+$checked=$checks['rows'][0];
+ensureReport($checked['opening']===null && $checked['incoming']==='3.000000' && $checked['outgoing']==='1.000000' && $checked['closing']===null,'Unknown opening must not hide known period flows.');
+ensureReport($checked['unit_price']==='7' && array_column($checked['movements'],'id')===['2','3'],'Latest confirmed import price, inclusive period boundaries or chronological movements incorrect.');
+ensureReport(count($checks['reconciliation'])===2,'Mismatch and empty receipts must be flagged, future and balanced receipts excluded.');
+$scoped=buildReport($history,reportFilters(['from'=>'2026-10-01','to'=>'2026-10-31','warehouse'=>'2','stock'=>'unknown'],$history));
+ensureReport(count($scoped['rows'])===1 && !$scoped['reconciliation'],'Unknown stock and reconciliation warehouse filters incorrect.');
+ensureReport(reportNumber(null)==='Chưa đủ dữ liệu' && reportNumber(null,6,'none')==='Không theo dõi','Unknown data must differ from intentionally untracked stock.');
+echo "PASS: five reports, exact stock/value arithmetic, inclusive dates, confirmed-only flows, warehouse/category/search filters, missing quantities, historical units, reference prices and reconciliation.\n";

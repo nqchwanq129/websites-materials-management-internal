@@ -78,7 +78,7 @@ if (in_array($page, ['home', 'exports', 'export-create', 'export-file', 'imports
     }
     if ($page === 'home' && $method === 'POST') { header('Allow: GET'); respondJson(['ok'=>false,'message'=>'Tổng quan chỉ hỗ trợ tra cứu.'],405); }
     if ($page !== 'home' && $method === 'POST') {
-        if ($page === 'reports') { header('Allow: GET'); respondJson(['ok' => false, 'message' => 'Báo cáo dùng dữ liệu mẫu, không ghi vào DB.'], 405); }
+        if ($page === 'reports') { header('Allow: GET'); respondJson(['ok' => false, 'message' => 'Báo cáo chỉ hỗ trợ tra cứu.'], 405); }
         if (in_array($page, ['imports', 'exports'], true)) { header('Allow: GET'); respondJson(['ok' => false, 'message' => 'Danh sách phiếu chỉ hỗ trợ tra cứu.'], 405); }
         if ($page === 'audit') { header('Allow: GET'); respondJson(['ok' => false, 'message' => 'Nhật ký chỉ được đọc.'], 405); }
         if (in_array($page, ['decision-file', 'import-file', 'export-file'], true)) { header('Allow: GET'); respondJson(['ok' => false, 'message' => 'Chỉ hỗ trợ tải file.'], 405); }
@@ -116,12 +116,14 @@ if (in_array($page, ['home', 'exports', 'export-create', 'export-file', 'imports
     }
     if ($page === 'reports') {
         require_once dirname(__DIR__) . '/app/reports.php';
-        $reportData = require dirname(__DIR__) . '/resources/data/reports-preview.php';
+        try { $reportData=loadReportData(connectDatabase(),(string)$user['id']); }
+        catch(Throwable $error) { error_log('QLVT reports read: '.$error->getMessage()); http_response_code(503); exit('Không thể tải số liệu báo cáo lúc này. Vui lòng thử lại sau.'); }
         $reportError = '';
         try { $filters = reportFilters($_GET, $reportData); $report = buildReport($reportData, $filters); }
         catch (DomainException $error) {
             $reportError = $error->getMessage(); $filters = reportFilters([], $reportData);
-            $report = ['rows' => [], 'summary' => array_fill_keys(['opening_value', 'incoming_value', 'outgoing_value', 'closing_value'], '0'), 'categories' => [], 'months' => [], 'units' => []];
+            $report = ['rows' => [], 'summary' => array_fill_keys(['opening_value', 'incoming_value', 'outgoing_value', 'closing_value'], '0'), 'categories' => [], 'months' => [], 'units' => [], 'unknown_count'=>0, 'reconciliation'=>[]];
+            http_response_code(422);
         }
         require dirname(__DIR__) . '/resources/views/reports/index.php';
         exit;

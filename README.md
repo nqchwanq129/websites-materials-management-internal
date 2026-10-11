@@ -112,7 +112,7 @@ temporary app copy on localhost. It drops only that test database afterward;
 the configured MySQL user needs CREATE/DROP DATABASE privileges. No application
 configuration or production records are changed by this check.
 UI fixtures live only in `tests/fixtures/`; production management pages never
-fall back to sample data. Home also reads real data; report pages remain previews.
+fall back to sample data. Home and all five report pages also read real data.
 
 Super admins can open **Kho hàng → Danh sách kho** at
 `public/index.php?page=warehouses`. The page reads real warehouse codes, names,
@@ -121,7 +121,7 @@ Search, status filters and pagination show 10 warehouses per page. Create/edit a
 activate/deactivate actions validate unique codes, reject stale edits and record
 before/after audit history in the same transaction. Inactive warehouses deny access
 and cannot receive new employee assignments or new grants; existing history and
-grants are preserved for reactivation. Stock reports currently use labeled sample data.
+grants are preserved for reactivation. Stock reports read confirmed receipt lines from the database.
 Run `php tests/home.php --warehouses` for fixture rendering and
 `php tests/management.php` for isolated database checks; the browser check includes
 warehouse forms, filters, pagination and fixed dialog headers/footers.
@@ -164,15 +164,21 @@ Decision list: `index.php?page=decisions` reads real database records (super adm
 
 Decision PDF attachments use the existing `attachments` table (`decision_id`, `original_name`, `storage_path`, `mime_type`, `created_by`); no schema change is needed. Upload one PDF per save (maximum 2 MiB), with server-side extension, MIME and signature validation. Files are appended to existing attachments and stored with random names in `storage/uploads/decisions/`, outside the public directory and excluded from Git. Download through `index.php?page=decision-file&id=...` requires an active super-admin session. Back up both the database and `storage/uploads/`; a source-code commit does not contain uploaded documents. Failed database/audit writes roll back metadata and remove the newly uploaded file.
 
-## Reports preview
+## Reports
 
-`index.php?page=reports&kind=inventory` provides five reports: inventory, materials, parts, tools and fixed assets. All business data comes from `resources/data/reports-preview.php`, never from MySQL; authentication still uses the existing login. Report pages and exported workbooks visibly identify sample data.
+`index.php?page=reports&kind=inventory` provides five live reports: inventory, materials, parts, tools and fixed assets. `loadReportData()` in `app/reports.php` reads the MySQL catalogue, warehouses, confirmed receipt headers/details, decisions and account roles in one consistent transaction. Access remains super-admin only; errors never fall back to sample data. Sample ledgers exist only in `tests/fixtures/reports.php`. No schema change or sample business inserts are required.
 
-Date, warehouse, category, stock-state and product filters run against the same ledger calculation in `app/reports.php`; only confirmed receipts count. Opening stock is imports minus exports before the start date; closing stock adds period imports and subtracts period exports. Rows are grouped by product ID and warehouse rather than names, quantities remain separate by unit, and tracking_mode=none displays no quantity. BCMath preserves DECIMAL precision. Value balances use amount_before_tax from receipt lines; tools/assets do not imply depreciation or accounting allocations absent from the new schema. Product specifications are shown; the old serial field is not exposed because it is absent from products in the new database.
+Date, warehouse, category, stock-state and product filters share the same ledger calculation. Opening stock is confirmed imports minus exports before the start date; closing stock adds imports and subtracts exports through the inclusive end date. Historical reports retain inactive warehouses/products. Each row is one product ID at one warehouse, with quantities summarized separately by unit. BCMath preserves six-decimal DECIMAL precision; values use stored line `amount_before_tax`, including receipt rounding and paired warehouse transfers. Unit price is the latest confirmed import price up to the end date, for reference only.
 
-Each report supports 10-row pagination, movement details with fixed dialog header/footer, a monthly value chart, printing all filtered rows and genuine XLSX export with report and movement worksheets. Local SheetJS CE 0.20.3 (Apache-2.0) writes XLSX without runtime CDN requests. Large numbers exceeding Excel precision remain text. Excel layouts follow the new reports and do not reproduce the old fixed spreadsheet templates.
+`tracking_mode=none` displays no tracked stock quantity. Confirmed tracked receipts with missing quantities or units that differ from the catalogue produce an unknown balance, rather than false zero stock. Known period flows and financial values remain visible; unknown balances are excluded from unit quantity totals and marked on screen, print and Excel. The unknown-stock filter finds these rows.
 
-Checks: `php tests/reports.php`, `php tests/home.php --reports`, `php tests/home.php --reports --report-kind=assets`, `php tests/auth.php`, and `node tests/home-ui.mjs`. The browser check verifies all five pages, genuine XLSX download/round-trip, pagination, print coverage and responsive dialogs. Replace the preview data source with validated, authorized DB queries when the report UI and business rules are approved; no database migration or sample business inserts have been made.
+Reconciliation flags confirmed receipts with no details or header totals differing from exact line sums. Scope is the selected warehouse through the end date, including opening history, independent of category/search/stock filters. Reports use line amounts and never rewrite existing records. The expandable check list identifies affected receipts; Excel adds a `Doi soat` sheet when checks or unknown quantities exist. Account totals count each account once, including locked accounts, prioritizing admin then keeper then viewer, and do not apply the report period filter.
+
+Compared with `reference_source/public/reports/`, the old materials/parts spreadsheets merged goods by name across warehouses and did not restrict receipt status. The new calculation uses confirmed product/warehouse ledgers instead. Old tool/asset exports relied on catalogue import dates and prices; the new reports use confirmed receipt history and show opening/period/closing values. Tools/assets do not calculate depreciation or accounting allocations absent from the schema. Specifications and receipt notes are available; the old serial field is absent from the new products schema. Adding a serial register or depreciation schedule later would require an explicit business model and schema change.
+
+Each report supports 10-row pagination, movement details with fixed dialog header/footer, monthly value charts, printing all filtered rows and genuine XLSX export with report and movement worksheets. Exported movements retain historical product names, units, specifications and notes from receipt lines. Local SheetJS CE 0.20.3 (Apache-2.0) writes XLSX without runtime CDN requests. Numbers exceeding Excel precision remain text, and names remain strings rather than spreadsheet formulas. Excel layouts follow the new reports rather than the old fixed spreadsheet templates. Dates and quick period presets use Vietnam time. Invalid filters disable print/export.
+
+Checks: `php tests/reports.php`, `php tests/home.php --reports`, `php tests/home.php --reports --live-report`, `php tests/auth.php`, `php tests/management.php` and `node tests/home-ui.mjs`. The management check clones the schema into an isolated database and compares all five HTTP reports against independent ledger SQL, including inactive history, unknown quantities, transfers, permissions and reconciliation. Browser checks verify five report layouts, source labels, XLSX downloads/round-trips, reconciliation sheets, pagination, print coverage and responsive dialogs.
 
 ## Product list
 
