@@ -75,7 +75,7 @@ function filterReceipts() {
             || !normalize(row.textContent).includes(query);
         if (!row.hidden) count++;
     }
-    document.getElementById('receipt-count').textContent = `Hiển thị ${count} / ${rows.length} phiếu minh họa`;
+    document.getElementById('receipt-count').textContent = `Hiển thị ${count} / ${rows.length} phiếu gần đây`;
     document.querySelector('.empty-state').hidden = count !== 0;
 }
 tabs.forEach(tab => tab.addEventListener('click', () => {
@@ -86,6 +86,7 @@ tabs.forEach(tab => tab.addEventListener('click', () => {
 if (search && warehouse) {
     search.addEventListener('input', filterReceipts);
     warehouse.addEventListener('change', filterReceipts);
+    filterReceipts();
 }
 
 function showNotification(message, status = 'success') {

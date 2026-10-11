@@ -31,11 +31,11 @@ APIs handle authentication; no additional dependency is required yet.
 
 Login uses `users.password_hash`, the active user status and employee status
 when an employee is assigned. Successful login opens the protected dashboard.
-The dashboard currently uses clearly labeled sample business data and makes no
-business database queries. Its menus reflect the reference app and new schema:
+The dashboard reads real product, warehouse and receipt summaries from MySQL.
+Its menus reflect the reference app and new schema:
 products, import/export receipts, warehouses, decisions, suppliers, employees,
 accounts and audit logs. Receipt search and warehouse/type filters work locally;
-unimplemented actions open an explanatory dialog. Sessions expire
+unimplemented sidebar actions open an explanatory dialog. Sessions expire
 after 30 minutes of inactivity. CSRF tokens protect login/logout, and 10 failed
 attempts from an IP address block further attempts for the current 5-minute window.
 
@@ -112,7 +112,7 @@ temporary app copy on localhost. It drops only that test database afterward;
 the configured MySQL user needs CREATE/DROP DATABASE privileges. No application
 configuration or production records are changed by this check.
 UI fixtures live only in `tests/fixtures/`; production management pages never
-fall back to sample data. The home dashboard remains a UI preview.
+fall back to sample data. Home also reads real data; report pages remain previews.
 
 Super admins can open **Kho hàng → Danh sách kho** at
 `public/index.php?page=warehouses`. The page reads real warehouse codes, names,
@@ -209,3 +209,11 @@ Select 1–200 lines from confirmed import lots in an active warehouse, with act
 Drafts do not reserve stock. Confirmed exports reduce stock; a confirmed warehouse transfer also creates a linked confirmed import in its active destination warehouse. Both receipts, line items, attachment metadata and audit events commit together; failures roll back and remove any new PDF. Draft editing, confirmation of existing drafts and cancellation are not implemented in this list/create stage. Uploaded files remain excluded from Git; back up the database and uploads together.
 
 Checks: `php tests/home.php --exports`, `php tests/home.php --export-create`, `php tests/management.php`, `php tests/auth.php`, `node tests/home-ui.mjs`. Database writes in the management check use an isolated test database, including rounding, overdraw prevention, paired transfers and rollback scenarios.
+
+### Live dashboard
+
+`index.php?page=home` reads consistent database summaries: distinct catalogue products and category shares, active warehouses, current-month import/export counts with confirmed counts, a six-month receipt-count chart and the ten most recent receipts by business date. Months and update times use Vietnam time, including across year boundaries. Counts include drafts and cancelled receipts as labelled; they do not represent stock quantities. Receipt values display the stored before-tax amounts at full DECIMAL precision. Empty data produces zero counts and empty charts/lists.
+
+Super admins see the whole system, including receipt history in inactive warehouses. Other active users see only active warehouses currently granted to them; products are counted once from receipt history in those warehouses. No grants expose no business records. Warehouse filtering and search apply to the ten displayed recent receipts. Admin shortcuts open existing pages, and receipt links open the requested detail dialog. Reports remain explicitly labelled previews. The dashboard is read-only and requires no schema change or sample records.
+
+Checks: `php tests/home.php`, `php tests/home.php --empty`, `php tests/management.php` (isolated database counts, dates, scope and revocation), `php tests/auth.php`, `node tests/home-ui.mjs` (charts, filters, receipt links and responsive layouts).

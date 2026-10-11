@@ -76,6 +76,7 @@ if (in_array($page, ['home', 'exports', 'export-create', 'export-file', 'imports
         http_response_code(403);
         exit('Bạn không có quyền truy cập trang quản lý này.');
     }
+    if ($page === 'home' && $method === 'POST') { header('Allow: GET'); respondJson(['ok'=>false,'message'=>'Tổng quan chỉ hỗ trợ tra cứu.'],405); }
     if ($page !== 'home' && $method === 'POST') {
         if ($page === 'reports') { header('Allow: GET'); respondJson(['ok' => false, 'message' => 'Báo cáo dùng dữ liệu mẫu, không ghi vào DB.'], 405); }
         if (in_array($page, ['imports', 'exports'], true)) { header('Allow: GET'); respondJson(['ok' => false, 'message' => 'Danh sách phiếu chỉ hỗ trợ tra cứu.'], 405); }
@@ -125,7 +126,14 @@ if (in_array($page, ['home', 'exports', 'export-create', 'export-file', 'imports
         require dirname(__DIR__) . '/resources/views/reports/index.php';
         exit;
     }
-    if ($page !== 'home') {
+    if ($page === 'home') {
+        require_once dirname(__DIR__) . '/app/dashboard.php';
+        try { $dashboardData = loadDashboard(connectDatabase(), (string)$user['id']); }
+        catch (Throwable $error) {
+            error_log('QLVT dashboard read: '.$error->getMessage());
+            http_response_code(503); exit('Không thể tải số liệu tổng quan lúc này. Vui lòng thử lại sau.');
+        }
+    } else {
         try { $managementData = loadManagement(connectDatabase(), $page); }
         catch (Throwable $error) {
             error_log('QLVT management read: ' . $error->getMessage());

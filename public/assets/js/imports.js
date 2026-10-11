@@ -70,3 +70,6 @@ function openImport(bill) {
     importDialog.showModal(); importDialog.querySelector('.account-dialog-body').scrollTop=0;
 }
 document.querySelectorAll('.import-details').forEach(button=>button.addEventListener('click',()=>openImport(JSON.parse(button.closest('[data-import]').dataset.import))));
+const requestedImportId=new URLSearchParams(window.location.search).get('id');
+const requestedImport=importRows.find(row=>JSON.parse(row.dataset.import).id===requestedImportId);
+if(requestedImport)openImport(JSON.parse(requestedImport.dataset.import));

@@ -21,7 +21,7 @@ if ($preview === 'reports') {
     foreach ($argv as $argument) if (str_starts_with($argument, '--report-kind=')) $kind = substr($argument, 14);
     $filters = reportFilters(['kind' => $kind], $reportData); $report = buildReport($reportData, $filters); $reportError = '';
     $sampleRows['reports'][1] = $kind === 'inventory' ? 60 : 12;
-} elseif ($preview !== 'dashboard') require __DIR__ . '/fixtures/' . (isset($productPages[$preview]) ? 'products' : $preview) . '.php';
+} else require __DIR__ . '/fixtures/' . (isset($productPages[$preview]) ? 'products' : $preview) . '.php';
 ob_start();
 require dirname(__DIR__) . '/resources/views/' . ($preview === 'dashboard' ? 'dashboard/home.php' : $preview . '/index.php');
 $html = ob_get_clean();

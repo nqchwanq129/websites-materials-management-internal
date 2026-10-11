@@ -89,7 +89,11 @@ try {
     assert.equal(await evaluate('document.querySelectorAll("[data-receipt]:not([hidden])").length'), 1, 'Accent-insensitive search failed.');
     await evaluate('document.getElementById("receipt-search").value="does-not-exist"; document.getElementById("receipt-search").dispatchEvent(new Event("input"))');
     assert.equal(await evaluate('document.querySelector(".empty-state").hidden'), false);
-    await evaluate('document.getElementById("receipt-search").value=""; document.getElementById("receipt-search").dispatchEvent(new Event("input")); document.querySelector(".button-primary[data-feature]").click()');
+    assert.equal(await evaluate('document.querySelector(".heading-actions .button-primary").getAttribute("href")'),'index.php?page=import-create');
+    assert.equal(await evaluate('document.querySelector("[data-receipt] .receipt-link").getAttribute("href")'),'index.php?page=imports&id=48');
+    assert.equal(await evaluate('document.querySelector(".donut .purple-ring").getAttribute("stroke-dasharray")'),'50.0000 100');
+    assert.equal(await evaluate('document.querySelector("[data-receipt] small").textContent'),'Thiết bị thông tin <script>');
+    await evaluate('document.getElementById("receipt-search").value=""; document.getElementById("receipt-search").dispatchEvent(new Event("input")); document.querySelector("[data-feature=\\"Hướng dẫn sử dụng\\"]").click()');
     assert.equal(await evaluate('document.getElementById("feature-dialog").open'), true);
     await page('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
     await page('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
@@ -801,7 +805,7 @@ try {
     }
     const importRender=spawnSync(php,['tests/home.php','--imports','--render'],{encoding:'utf8',windowsHide:true});
     assert.equal(importRender.status,0,importRender.stderr);
-    await page('Page.navigate',{url:process.env.LOGIN_URL || 'http://localhost/qlvt-remake/public/'});
+    await page('Page.navigate',{url:(process.env.LOGIN_URL || 'http://localhost/qlvt-remake/public/')+'?id=1'});
     for (let i=0;i<100;i++) {
         if (await evaluate('document.readyState === "complete" && Boolean(document.getElementById("login-form"))')) break;
         await new Promise(resolve=>setTimeout(resolve,100));
@@ -812,6 +816,8 @@ try {
         if (await evaluate('document.readyState === "complete" && typeof filterImports === "function"')) break;
         await new Promise(resolve=>setTimeout(resolve,100));
     }
+    assert.equal(await evaluate('importDialog.open && document.getElementById("import-detail-number").textContent==="PN-001"'),true,'Dashboard link must open the requested import.');
+    await evaluate('importDialog.close()');
     assert.equal(await evaluate('document.querySelectorAll("[data-import]:not([hidden])").length'),10);
     assert.equal(await evaluate(`Boolean(document.querySelector('.navigation a[href="index.php?page=imports"].active[aria-current=page]')?.closest('details[open]'))`),true,'Import sidebar must link to the real page and expand its group.');
     await evaluate('importNext.click()');
@@ -931,10 +937,10 @@ try {
     assert.equal(uploadCheck.inputEnabled,true);
     assert.equal(uploadCheck.invoiceNumber,'00000548');
     assert.equal(uploadCheck.total,'2.390.000 ₫');
-    for (const route of ['exports','export-create']) {
-        const render=spawnSync(php,['tests/home.php','--'+route,'--render'],{encoding:'utf8',windowsHide:true});
+    for (const route of ['empty-dashboard','exports','export-create']) {
+        const render=spawnSync(php,['tests/home.php',route==='empty-dashboard'?'--empty':'--'+route,'--render'],{encoding:'utf8',windowsHide:true});
         assert.equal(render.status,0,render.stderr);
-        await page('Page.navigate',{url:process.env.LOGIN_URL||'http://localhost/qlvt-remake/public/'});
+        await page('Page.navigate',{url:(process.env.LOGIN_URL||'http://localhost/qlvt-remake/public/')+(route==='exports'?'?id=1':'')});
         for(let i=0;i<100;i++) {
             if(await evaluate('document.readyState==="complete" && Boolean(document.getElementById("login-form"))'))break;
             await new Promise(resolve=>setTimeout(resolve,100));
@@ -942,10 +948,16 @@ try {
         const frame=await page('Page.getFrameTree');
         await page('Page.setDocumentContent',{frameId:frame.frameTree.frame.id,html:render.stdout});
         for(let i=0;i<100;i++) {
-            if(await evaluate(`document.readyState==="complete" && typeof ${route==='exports'?'filterExports':'updateExportTotals'}==="function"`))break;
+            if(await evaluate(`document.readyState==="complete" && typeof ${route==='empty-dashboard'?'filterReceipts':route==='exports'?'filterExports':'updateExportTotals'}==="function"`))break;
             await new Promise(resolve=>setTimeout(resolve,100));
         }
-        if(route==='exports') {
+        if(route==='empty-dashboard') {
+            assert.equal(await evaluate('[...document.querySelectorAll("[data-dashboard-metric]")].every(value=>value.textContent==="0")'),true);
+            assert.equal(await evaluate('rows.length===0 && !document.querySelector(".empty-state").hidden'),true,'Empty database must not show sample receipts.');
+            assert.equal(await evaluate('[...document.querySelectorAll(".category-ring [stroke-dasharray]")].every(circle=>circle.getAttribute("stroke-dasharray")==="0.0000 100")'),true,'Empty catalogue must not show invented category shares.');
+        } else if(route==='exports') {
+            assert.equal(await evaluate('exportDialog.open && document.getElementById("export-detail-number").textContent==="PX-001"'),true,'Dashboard link must open the requested export.');
+            await evaluate('exportDialog.close()');
             assert.equal(await evaluate('document.querySelectorAll("[data-export]:not([hidden])").length'),10);
             await evaluate('exportNext.click()');
             assert.equal(await evaluate('document.querySelectorAll("[data-export]:not([hidden])").length'),2);

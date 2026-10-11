@@ -94,6 +94,7 @@ try {
     check($cookie !== $beforeLogin, 'Successful login must rotate the session ID.');
     [$status, $body] = request('index.php?page=home');
     check($status === 200 && str_contains($body, 'TỔNG QUAN HOẠT ĐỘNG') && str_contains($body, $username) && !str_contains($body, $password), 'Protected dashboard did not authenticate correctly.');
+    check(str_contains($body,'Dữ liệu thực tế') && !str_contains($body,'Số liệu minh họa'),'Dashboard must read real database data.');
     $logoutToken = csrf($body);
     check(request('index.php?page=accounts')[0] === 200, 'Super admin should access account UI.');
     check(request('index.php?page=employees')[0] === 200, 'Super admin should access employee UI.');
@@ -122,6 +123,8 @@ try {
     check(request('index.php?page=employees', ['csrf_token' => $logoutToken])[0] === 422, 'Invalid employee writes must be rejected.');
     check(request('index.php?page=audit', ['csrf_token' => $logoutToken])[0] === 405, 'Audit history must reject writes.');
     $pdo->prepare('UPDATE users SET is_super_admin=0 WHERE id=?')->execute([$userId]);
+    [, $homeBody]=request('index.php?page=home');
+    check(!str_contains($homeBody,'data-receipt ') && !str_contains($homeBody,'class="heading-actions"'),'Home must not expose records or create shortcuts without warehouse grants.');
     check(request('index.php?page=accounts')[0] === 403, 'Non-admin users must not access account management.');
     check(request('index.php?page=employees')[0] === 403, 'Non-admin users must not access employee management.');
     check(request('index.php?page=warehouses')[0] === 403, 'Non-admin users must not access warehouse management.');

@@ -4,6 +4,7 @@ declare(strict_types=1);
 require dirname(__DIR__) . '/config/database.php';
 require dirname(__DIR__) . '/app/auth.php';
 require dirname(__DIR__) . '/app/management.php';
+require dirname(__DIR__) . '/app/dashboard.php';
 function verify(bool $value, string $message): void { if (!$value) throw new RuntimeException($message); }
 function rejected(callable $operation): void {
     try { $operation(); } catch (DomainException $error) { return; }
@@ -513,6 +514,35 @@ try {
     $draftTransfer=array_values(array_filter(loadExports($pdo),static fn($row)=>$row['number']==='DRAFT-TRANSFER'))[0];
     verify(!$draftTransfer['transfers'] && loadExportSources($pdo,$transferId)[0]['remaining_quantity']==='2.000000','Draft transfer must not move stock or create incoming receipt.');
     [, $body]=httpManagement('exports'); verify(str_contains($body,'EXPORT-TRANSFER') && str_contains($body,'Người nhận &lt;script&gt;') && !str_contains($body,'data-preview="true"'),'Export list must render real records and escape receivers.');
+    $dashboardTime=new DateTimeImmutable('2026-10-10 12:00:00',new DateTimeZone('Asia/Ho_Chi_Minh'));
+    $overview=loadDashboard($pdo,$actorId,$dashboardTime);
+    verify($overview['products']===(int)$pdo->query('SELECT COUNT(*) FROM products')->fetchColumn() && array_sum($overview['categories'])===$overview['products'],'Dashboard must count distinct catalogue products rather than receipt lines.');
+    verify($overview['active_warehouses']===(int)$pdo->query("SELECT COUNT(*) FROM warehouses WHERE status='active'")->fetchColumn(),'Active warehouse count incorrect.');
+    foreach(['import'=>['import_bill','received_date'],'export'=>['export_bill','issued_date']] as $direction=>[$table,$dateField]) {
+        $expected=(int)$pdo->query("SELECT COUNT(*) FROM $table WHERE $dateField>='2026-10-01' AND $dateField<'2026-11-01'")->fetchColumn();
+        $confirmedCount=(int)$pdo->query("SELECT COUNT(*) FROM $table WHERE $dateField>='2026-10-01' AND $dateField<'2026-11-01' AND status='confirmed'")->fetchColumn();
+        verify($overview['counts'][$direction]===['total'=>$expected,'confirmed'=>$confirmedCount] && $overview['months']['2026-10'][$direction]===$expected,'Dashboard monthly status counts or chart incorrect.');
+    }
+    verify(count($overview['receipts'])===10 && count($overview['months'])===6 && array_key_first($overview['months'])==='2026-05','Dashboard must limit recent receipts and retain empty months.');
+    $recentAmounts=array_column($overview['receipts'],'amount'); verify(in_array('6.666667',$recentAmounts,true),'Dashboard must preserve stored before-tax DECIMAL values.');
+    $rollover=loadDashboard($pdo,$actorId,new DateTimeImmutable('2027-01-01T00:15:00+07:00'));
+    verify(array_keys($rollover['months'])===['2026-08','2026-09','2026-10','2026-11','2026-12','2027-01'] && $rollover['counts']['import']['total']===0,'Dashboard month windows must cross year boundaries.');
+    $scoped=loadDashboard($pdo,$targetId,$dashboardTime);
+    verify(count($scoped['warehouses'])===1 && isset($scoped['warehouses'][$warehouseIds[0]]) && array_reduce($scoped['receipts'],static fn($ok,$row)=>$ok && (string)$row['warehouse_id']===$warehouseIds[0],true),'Dashboard must filter warehouse grants on the server.');
+    $expectedScoped=(int)$pdo->query("SELECT COUNT(*) FROM import_bill WHERE warehouse_id={$warehouseIds[0]} AND received_date>='2026-10-01' AND received_date<'2026-11-01'")->fetchColumn();
+    verify($scoped['counts']['import']['total']===$expectedScoped && $scoped['months']['2026-10']['import']===$expectedScoped && $scoped['products']<$overview['products'],'Restricted dashboards must not leak global metric/chart/catalogue totals.');
+    $pdo->prepare('DELETE FROM user_warehouses WHERE user_id=? AND warehouse_id=?')->execute([$targetId,$warehouseIds[0]]);
+    $emptyOverview=loadDashboard($pdo,$targetId,$dashboardTime);
+    verify($emptyOverview['products']===0 && !$emptyOverview['receipts'] && !$emptyOverview['warehouses'] && $emptyOverview['counts']['import']['total']===0,'No grants must expose no business data.');
+    $pdo->prepare("INSERT INTO user_warehouses (user_id,warehouse_id,role) VALUES (?,?,'viewer')")->execute([$targetId,$warehouseIds[0]]);
+    $pdo->prepare("UPDATE warehouses SET status='inactive' WHERE id=?")->execute([$warehouseIds[0]]);
+    verify(!loadDashboard($pdo,$targetId,$dashboardTime)['receipts'],'Inactive warehouses must not remain visible to ordinary users.');
+    $pdo->prepare("UPDATE warehouses SET status='active' WHERE id=?")->execute([$warehouseIds[0]]);
+    [, $body]=httpManagement('home'); verify(str_contains($body,'Dữ liệu thực tế') && !str_contains($body,'Số liệu minh họa') && str_contains($body,'data-dashboard-metric='),'Home must render real database totals.');
+    verify(httpManagement('home',['csrf_token'=>$csrf])[0]===405,'Dashboard must reject writes.');
+    $pdo->prepare('UPDATE users SET is_super_admin=0 WHERE id=?')->execute([$actorId]);
+    [, $body]=httpManagement('home'); verify(!str_contains($body,'data-receipt ') && !str_contains($body,'class="heading-actions"'),'Ordinary account without grants must see no receipts or create shortcuts.');
+    $pdo->prepare('UPDATE users SET is_super_admin=1 WHERE id=?')->execute([$actorId]);
     $pdo->exec("CREATE TRIGGER test_audit_failure BEFORE INSERT ON audit_logs FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Test audit failure'");
     $rollbackExport=$confirmed; $rollbackExport['number']='ROLLBACK-EXPORT'; $rollbackExport['items']=$transfer['items'];
     $exportFilesBefore=count(glob($testRoot.'/storage/uploads/exports/*.pdf'));
