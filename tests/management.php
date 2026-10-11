@@ -120,6 +120,7 @@ try {
         'employee' => $employeeId, 'admin' => '0', 'status' => 'active', 'warehouses' => [$warehouseIds[0] => 'keeper', $warehouseIds[1] => 'viewer']];
     verify(httpManagement('accounts', $accountInput)[0] === 200, 'Account and warehouse grants failed.');
     $createdUser = findUser($pdo, 'username', $prefix . '-user');
+    verify($createdUser['employee_warehouse_name']==='Test warehouse 1','User lookup must load the assigned employee warehouse.');
     $targetId = (string) $createdUser['id'];
     verify(password_verify($password, $createdUser['password_hash']), 'Password not hashed correctly.');
     verify(warehousePermission($pdo, $targetId, $warehouseIds[0]) === 'keeper', 'Keeper role failed.');

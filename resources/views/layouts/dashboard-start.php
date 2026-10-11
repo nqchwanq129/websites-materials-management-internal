@@ -1,5 +1,7 @@
 <?php
 $displayName = $user['full_name'] ?? $user['username'];
+$topbarWarehouse = (int)$user['is_super_admin'] === 1 ? 'Toàn hệ thống' : ($user['employee_warehouse_name'] ?? 'Chưa gán kho');
+$topbarWarehouseHint = ((int)$user['is_super_admin'] === 1 ? 'Phạm vi quản trị: ' : 'Kho của bạn: ') . $topbarWarehouse;
 $navigation = [
     ['box', 'Hàng hóa', array_map(static fn($label, $page) => [$label, (int) $user['is_super_admin'] === 1 ? 'index.php?page=' . $page : ''], ['Danh sách hàng hóa', 'Vật tư', 'Phụ tùng thay thế', 'Công cụ, dụng cụ', 'Tài sản cố định', 'Hàng hóa khác'], ['products', 'materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products'])],
     ['down', 'Phiếu nhập kho', [['Danh sách phiếu nhập', (int) $user['is_super_admin'] === 1 ? 'index.php?page=imports' : ''], ['Tạo phiếu nhập', (int) $user['is_super_admin'] === 1 ? 'index.php?page=import-create' : '']]],
@@ -86,5 +88,5 @@ $openGroup = ['exports' => 'Phiếu xuất kho', 'export-create' => 'Phiếu xu�
     </aside>
     <button class="menu-backdrop" type="button" aria-label="Đóng menu" hidden></button>
     <div class="content-shell">
-        <header class="topbar"><div class="breadcrumb"><button id="menu-toggle" class="icon-button" type="button" aria-controls="sidebar" aria-expanded="false" aria-label="Mở menu"><?= $icon('menu') ?></button><span>Không gian làm việc</span><span class="breadcrumb-divider">/</span><strong><?= escapeHtml($pageTitle) ?></strong></div><div class="topbar-right"><span class="internal-badge"><span class="live-dot"></span> Hệ thống nội bộ</span><span class="avatar avatar-small"><?= escapeHtml(mb_strtoupper(mb_substr($displayName, 0, 1))) ?></span></div></header>
+        <header class="topbar"><div class="breadcrumb"><button id="menu-toggle" class="icon-button" type="button" aria-controls="sidebar" aria-expanded="false" aria-label="Mở menu"><?= $icon('menu') ?></button><span>Không gian làm việc</span><span class="breadcrumb-divider">/</span><strong><?= escapeHtml($pageTitle) ?></strong></div><div class="topbar-right"><span class="internal-badge topbar-warehouse" title="<?= escapeHtml($topbarWarehouseHint) ?>"><?= $icon((int)$user['is_super_admin'] === 1 ? 'shield' : 'warehouse') ?><span class="topbar-warehouse-text"><?= escapeHtml($topbarWarehouse) ?></span></span><span class="avatar avatar-small"><?= escapeHtml(mb_strtoupper(mb_substr($displayName, 0, 1))) ?></span></div></header>
         <main id="main-content" tabindex="-1">

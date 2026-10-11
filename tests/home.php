@@ -3,6 +3,8 @@ declare(strict_types=1);
 // Render the dashboard without any database connection: php tests/home.php [--render].
 function escapeHtml(string $value): string { return htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); }
 $user = ['username' => 'preview-admin', 'full_name' => 'Quản trị viên <script>', 'is_super_admin' => 1];
+if(in_array('--warehouse-label',$argv,true)) $user['is_super_admin']=0;
+$user['employee_warehouse_name']='Kho Hải Phòng <script> với tên dài để kiểm tra giao diện';
 $_SESSION = ['csrf_token' => str_repeat('a', 64)];
 $preview = 'dashboard';
 $productPages = ['materials' => 3, 'spare-parts' => 3, 'tools' => 2, 'fixed-assets' => 2, 'other-products' => 2];
@@ -25,6 +27,7 @@ if ($preview === 'reports') {
 ob_start();
 require dirname(__DIR__) . '/resources/views/' . ($preview === 'dashboard' ? 'dashboard/home.php' : $preview . '/index.php');
 $html = ob_get_clean();
+if(!str_contains($html,'title="'.escapeHtml($user['is_super_admin']?'Phạm vi quản trị: Toàn hệ thống':'Kho của bạn: '.$user['employee_warehouse_name']).'"')) throw new RuntimeException('Topbar warehouse label or escaping failed.');
 if (str_contains($html, 'Quản trị viên <script>') || !str_contains($html, 'Quản trị viên &lt;script&gt;')
     || substr_count($html, $sampleRows[$preview][0]) !== $sampleRows[$preview][1]
     || !str_contains($html, 'name="csrf_token"')

@@ -80,6 +80,9 @@ try {
         await new Promise(resolve => setTimeout(resolve, 100));
     }
     assert.equal(await evaluate('typeof filterReceipts'), 'function', 'Dashboard script failed to load.');
+    assert.equal(await evaluate('document.querySelector(".topbar-warehouse").textContent'),'Toàn hệ thống');
+    assert.equal(await evaluate('document.querySelector(".topbar-warehouse .icon use").getAttribute("href")'),'#i-shield');
+    assert.equal(await evaluate('document.querySelector(".topbar-warehouse").title'),'Phạm vi quản trị: Toàn hệ thống');
     assert.equal(await evaluate('document.querySelectorAll("[data-receipt]:not([hidden])").length'), 5);
     await evaluate('document.querySelectorAll(".tab")[1].click()');
     assert.equal(await evaluate('document.querySelectorAll("[data-receipt]:not([hidden])").length'), 3);
@@ -120,6 +123,8 @@ try {
         await page('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
         await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
         await evaluate('window.scrollTo(0,0)');
+        assert.equal(await evaluate('document.querySelector(".topbar-warehouse").getClientRects().length>0'),true,'Warehouse name must remain visible on small screens.');
+        assert.equal(await evaluate(`(()=>{const label=document.querySelector('.topbar-warehouse-text'),previous=label.textContent;label.textContent='Kho Hải Phòng với tên rất dài để kiểm tra';const fits=document.documentElement.scrollWidth<=innerWidth;label.textContent=previous;return fits;})()`),true,'Long warehouse names must not overflow the topbar.');
         assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, `Page overflow at ${width}px: ` + JSON.stringify(await evaluate('({scroll:document.documentElement.scrollWidth,client:document.documentElement.clientWidth,body:document.body.scrollWidth,inner:innerWidth,main:document.querySelector("main").getBoundingClientRect().toJSON(),table:document.querySelector(".table-scroll").getBoundingClientRect().toJSON()})')) + JSON.stringify(await evaluate('[...document.querySelectorAll("body *")].filter(e=>e.getBoundingClientRect().right>innerWidth && !e.closest(".table-scroll")).map(e=>({tag:e.tagName,cls:e.className,right:e.getBoundingClientRect().right})).slice(0,15)')));
         assert.equal(await evaluate('document.querySelector(".brand img").naturalWidth>0'), true);
         assert.deepEqual(await evaluate(`(() => {

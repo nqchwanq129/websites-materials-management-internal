@@ -6,8 +6,9 @@ function findUser(PDO $pdo, string $column, string|int $value): ?array
     if (!in_array($column, ['username', 'id'], true)) {
         throw new InvalidArgumentException('Invalid user lookup.');
     }
-    $statement = $pdo->prepare("SELECT u.*, e.full_name, e.status AS employee_status
-        FROM users u LEFT JOIN employees e ON e.id = u.employee_id WHERE u.$column = ? LIMIT 1");
+    $statement = $pdo->prepare("SELECT u.*, e.full_name, e.status AS employee_status, w.name AS employee_warehouse_name
+        FROM users u LEFT JOIN employees e ON e.id = u.employee_id
+        LEFT JOIN warehouses w ON w.id=e.warehouse_id WHERE u.$column = ? LIMIT 1");
     $statement->execute([$value]);
     return $statement->fetch() ?: null;
 }
