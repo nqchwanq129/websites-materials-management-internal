@@ -41,7 +41,6 @@ const reportDecisionLabel = movement => movement.decision_number || (movement.de
 function openReportDetail(key) {
     const row = reportData.report.rows.find(row => row.key === key);
     document.getElementById('report-detail-name').textContent = `${row.code} · ${row.name} · ${row.warehouse_name}`;
-    document.getElementById('report-detail-specifications').textContent = row.specifications;
     const balance = document.getElementById('report-detail-balance'); balance.replaceChildren();
     for (const [field, label] of [['opening', 'Tồn đầu'], ['incoming', 'Nhập'], ['outgoing', 'Xuất'], ['closing', 'Tồn cuối']]) {
         const item = document.createElement('p');
@@ -57,7 +56,7 @@ function openReportDetail(key) {
         }
         if (movement.product_name) {
             const snapshot = document.createElement('small');
-            snapshot.textContent = movement.product_name + (movement.specifications ? ' · ' + movement.specifications : '');
+            snapshot.textContent = movement.product_name;
             tr.firstElementChild.append(snapshot);
         }
         rows.append(tr);
@@ -103,19 +102,19 @@ function reportExcelValue(value, trackingMode = 'quantity') {
     return String(value).replace(/[^0-9]/g, '').replace(/^0+/, '').length <= 15 ? Number(value) : String(value);
 }
 function buildReportWorkbook() {
-    const headers = ['Mã hàng', 'Tên hàng', 'Kho', 'Đơn vị', 'Đơn giá nhập tham chiếu', 'Tồn đầu', 'Nhập trong kỳ', 'Xuất trong kỳ', 'Tồn cuối', 'Giá trị tồn đầu', 'Giá trị nhập', 'Giá trị xuất', 'Giá trị tồn cuối', 'Quy cách'];
+    const headers = ['Mã hàng', 'Tên hàng', 'Kho', 'Đơn vị', 'Đơn giá nhập tham chiếu', 'Tồn đầu', 'Nhập trong kỳ', 'Xuất trong kỳ', 'Tồn cuối', 'Giá trị tồn đầu', 'Giá trị nhập', 'Giá trị xuất', 'Giá trị tồn cuối'];
     const rows = reportData.report.rows.map(row => [row.code, row.name, row.warehouse_name, row.unit, reportExcelValue(row.unit_price),
-        ...['opening', 'incoming', 'outgoing', 'closing', 'opening_value', 'incoming_value', 'outgoing_value', 'closing_value'].map(key => reportExcelValue(row[key], row.tracking_mode)), row.specifications]);
+        ...['opening', 'incoming', 'outgoing', 'closing', 'opening_value', 'incoming_value', 'outgoing_value', 'closing_value'].map(key => reportExcelValue(row[key], row.tracking_mode))]);
     const totals = reportData.report.summary;
     const sheet = XLSX.utils.aoa_to_sheet([['VISHIPEL — ' + reportData.title], [reportData.preview ? 'DỮ LIỆU MẪU — CHƯA KẾT NỐI DB' : 'DỮ LIỆU THỰC TẾ — PHIẾU ĐÃ XÁC NHẬN'],
         [`Kỳ: ${reportData.filters.from} đến ${reportData.filters.to}`], [`Kho: ${reportData.warehouses[reportData.filters.warehouse] || 'Tất cả kho'} · Giá trị trước thuế, VND`], [], headers, ...rows,
         ['Tổng giá trị', '', '', '', '', '', '', '', '', ...['opening_value', 'incoming_value', 'outgoing_value', 'closing_value'].map(key => reportExcelValue(totals[key]))]]);
-    sheet['!cols'] = [16, 36, 22, 14, ...Array(9).fill({ wch: 22 }), { wch: 55 }].map(value => typeof value === 'number' ? { wch: value } : value);
-    sheet['!autofilter'] = { ref: `A6:N${Math.max(6, rows.length + 6)}` };
+    sheet['!cols'] = [16, 36, 22, 14, ...Array(9).fill({ wch: 22 })].map(value => typeof value === 'number' ? { wch: value } : value);
+    sheet['!autofilter'] = { ref: `A6:M${Math.max(6, rows.length + 6)}` };
     const movements = reportData.report.rows.flatMap(row => row.movements.map(movement => [row.code, movement.product_name ?? row.name, row.warehouse_name, movement.date, movement.number,
-        movement.direction === 'import' ? 'Nhập' : 'Xuất', reportExcelValue(movement.quantity, row.tracking_mode), movement.unit ?? row.unit, reportExcelValue(movement.amount_before_tax), reportDecisionLabel(movement), movement.specifications ?? row.specifications, movement.note || '']));
-    const detail = XLSX.utils.aoa_to_sheet([[(reportData.preview ? 'DỮ LIỆU MẪU — ' : '') + 'PHÁT SINH ĐÃ XÁC NHẬN TRONG KỲ'], ['Mã hàng', 'Tên hàng trên phiếu', 'Kho', 'Ngày', 'Số phiếu', 'Loại', 'Số lượng', 'Đơn vị', 'Giá trị trước thuế', 'Quyết định', 'Quy cách trên phiếu', 'Ghi chú'], ...movements]);
-    detail['!cols'] = [16, 36, 22, 14, 28, 12, 20, 12, 24, 22, 40, 40].map(wch => ({ wch }));
+        movement.direction === 'import' ? 'Nhập' : 'Xuất', reportExcelValue(movement.quantity, row.tracking_mode), movement.unit ?? row.unit, reportExcelValue(movement.amount_before_tax), reportDecisionLabel(movement), movement.note || '']));
+    const detail = XLSX.utils.aoa_to_sheet([[(reportData.preview ? 'DỮ LIỆU MẪU — ' : '') + 'PHÁT SINH ĐÃ XÁC NHẬN TRONG KỲ'], ['Mã hàng', 'Tên hàng trên phiếu', 'Kho', 'Ngày', 'Số phiếu', 'Loại', 'Số lượng', 'Đơn vị', 'Giá trị trước thuế', 'Quyết định', 'Ghi chú'], ...movements]);
+    detail['!cols'] = [16, 36, 22, 14, 28, 12, 20, 12, 24, 22, 40].map(wch => ({ wch }));
     const workbook = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(workbook, sheet, 'Bao cao'); XLSX.utils.book_append_sheet(workbook, detail, 'Phat sinh');
     if (reportData.report.unknown_count || reportData.report.reconciliation.length) {
         const checks = XLSX.utils.aoa_to_sheet([

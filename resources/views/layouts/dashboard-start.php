@@ -53,7 +53,8 @@ $openGroup = ['exports' => 'Phiếu xuất kho', 'export-create' => 'Phiếu xu�
     <script src="<?= $assetUrl('assets/js/dashboard.js') ?>" defer></script>
     <link rel="stylesheet" href="<?= $assetUrl('assets/css/accounts.css') ?>">
     <script src="<?= $assetUrl('assets/js/profile.js') ?>" defer></script>
-    <?php if (in_array($activePage, ['import-create', 'export-create'], true)): ?><script src="<?= $assetUrl('assets/js/receipt-decimal.js') ?>" defer></script><?php endif; ?>
+    <?php if (in_array($activePage, ['imports','import-create'], true)): ?><link rel="stylesheet" href="<?= $assetUrl('assets/css/import-images.css') ?>"><script src="<?= $assetUrl('assets/js/import-images.js') ?>" defer></script><?php endif; ?>
+    <?php if (in_array($activePage, ['imports', 'import-create', 'export-create'], true)): ?><script src="<?= $assetUrl('assets/js/receipt-decimal.js') ?>" defer></script><?php endif; ?>
     <?php $isProductPage = in_array($activePage, ['products', 'materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products'], true); ?>
     <?php if ($isProductPage || in_array($activePage, ['export-create', 'exports', 'import-create', 'imports', 'accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'audit'], true)): ?><script src="<?= $assetUrl('assets/js/' . ($isProductPage ? 'products' : $activePage) . '.js') ?>" defer></script><?php endif; ?>
     <?php if (in_array($activePage, ['import-create', 'export-create'], true)): ?><link rel="stylesheet" href="<?= $assetUrl('assets/css/import-create.css') ?>"><?php endif; ?>

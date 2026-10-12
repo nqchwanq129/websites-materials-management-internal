@@ -1,5 +1,6 @@
 # Reference implementation kept locally for consultation only.
 /reference_source/
+/reference_source_2/
 
 # Local configuration and secrets.
 /.env

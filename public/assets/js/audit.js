@@ -44,14 +44,14 @@ document.getElementById('audit-reset').addEventListener('click', () => {
 });
 filterAudit();
 const auditDialog = document.getElementById('audit-dialog');
-const auditFields = { id: 'ID', address: 'Địa chỉ', employee_id: 'Nhân viên liên kết', warehouse_id: 'Kho làm việc', warehouses: 'Quyền theo kho', password_changed: 'Đã đổi mật khẩu', username: 'Tên đăng nhập', full_name: 'Họ và tên', email: 'Email', phone: 'Số điện thoại', status: 'Trạng thái', name: 'Tên', code: 'Mã', unit: 'Đơn vị', specifications: 'Quy cách', number: 'Số phiếu / quyết định', reason: 'Lý do', cancel_reason: 'Lý do hủy', total_before_tax: 'Giá trị trước thuế', is_super_admin: 'Quản trị viên toàn hệ thống', decision_type: 'Loại quyết định', issued_date: 'Ngày ban hành' };
+const auditFields = { id: 'ID', address: 'Địa chỉ', employee_id: 'Nhân viên liên kết', warehouse_id: 'Kho làm việc', warehouses: 'Quyền theo kho', password_changed: 'Đã đổi mật khẩu', username: 'Tên đăng nhập', full_name: 'Họ và tên', email: 'Email', phone: 'Số điện thoại', status: 'Trạng thái', name: 'Tên', code: 'Mã', unit: 'Đơn vị', number: 'Số phiếu / quyết định', reason: 'Lý do', cancel_reason: 'Lý do hủy', total_before_tax: 'Giá trị trước thuế', is_super_admin: 'Quản trị viên toàn hệ thống', decision_type: 'Loại quyết định', issued_date: 'Ngày ban hành' };
 function auditValue(data, key) {
     if (!data || !Object.hasOwn(data, key)) return 'Chưa có dữ liệu';
     const value = data[key];
     if (value === null) return 'Không có giá trị';
     if (value === '') return 'Trống';
     if (typeof value === 'boolean') return value ? 'Có' : 'Không';
-    return typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value);
+    return typeof value === 'object' ? JSON.stringify(value, (field, content) => field === 'specifications' ? undefined : content, 2) : String(value);
 }
 function openAudit(log) {
     document.getElementById('audit-detail-description').textContent = log.description;
@@ -61,6 +61,7 @@ function openAudit(log) {
     changes.replaceChildren();
     const keys = new Set([...Object.keys(log.before_data || {}), ...Object.keys(log.after_data || {})]);
     for (const key of keys) {
+        if (key === 'specifications') continue;
         const row = document.createElement('tr');
         row.classList.toggle('audit-changed', JSON.stringify(log.before_data?.[key]) !== JSON.stringify(log.after_data?.[key]));
         for (const text of [auditFields[key] || key, auditValue(log.before_data, key), auditValue(log.after_data, key)]) {

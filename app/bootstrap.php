@@ -10,7 +10,7 @@ header('Content-Type: text/html; charset=utf-8');
 header('Cache-Control: no-store');
 header('Referrer-Policy: no-referrer');
 header('X-Content-Type-Options: nosniff');
-header('Content-Security-Policy: default-src \'self\'; script-src \'self\'; style-src \'self\'; img-src \'self\'; base-uri \'self\'; form-action \'self\'; frame-ancestors \'none\'');
+header('Content-Security-Policy: default-src \'self\'; script-src \'self\'; style-src \'self\'; img-src \'self\' blob:; base-uri \'self\'; form-action \'self\'; frame-ancestors \'none\'');
 
 ini_set('session.use_strict_mode', '1');
 ini_set('session.use_only_cookies', '1');

@@ -1,7 +1,7 @@
 // Run with Node 22+ and XAMPP: node tests/home-ui.mjs. Renders samples without database.
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once } from 'node:events';
@@ -12,6 +12,8 @@ const browserPath = [process.env.CHROME_PATH,
 ].find(path => path && existsSync(path));
 assert.ok(browserPath, 'Install Chrome/Edge or set CHROME_PATH.');
 const outputDir = mkdtempSync(join(tmpdir(), 'qlvt-home-check-'));
+mkdirSync(join(outputDir,'profile','Default'),{recursive:true});
+writeFileSync(join(outputDir,'profile','Default','Preferences'),JSON.stringify({plugins:{always_open_pdf_externally:true}}));
 const browser = spawn(browserPath, ['--headless=new', '--remote-debugging-port=0',
     `--user-data-dir=${join(outputDir, 'profile')}`, '--no-first-run', '--no-default-browser-check',
     '--disable-background-networking', 'about:blank'], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
@@ -35,11 +37,18 @@ try {
     const pending = new Map();
     const pageErrors = [];
     const failedRequests = [];
+    const requestUrls = new Map();
+    const downloads = [];
     let postRequests = 0;
     socket.addEventListener('message', event => {
         const message = JSON.parse(event.data);
         if (message.method === 'Runtime.exceptionThrown') pageErrors.push(message.params.exceptionDetails.text);
-        if (message.method === 'Network.loadingFailed') failedRequests.push(message.params.errorText);
+        if (message.method === 'Browser.downloadWillBegin') downloads.push(message.params.url);
+        if (message.method === 'Network.requestWillBeSent') requestUrls.set(message.params.requestId,message.params.request.url);
+        if (message.method === 'Network.loadingFailed') {
+            const url=requestUrls.get(message.params.requestId);
+            failedRequests.push({error:message.params.errorText,type:message.params.type,url});
+        }
         if (message.method === 'Network.requestWillBeSent' && message.params.request.method === 'POST') postRequests++;
         if (!pending.has(message.id)) return;
         const request = pending.get(message.id);
@@ -57,6 +66,7 @@ try {
     const { targetId } = await send('Target.createTarget', { url: 'about:blank' });
     const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
     const page = (method, params) => send(method, params, sessionId);
+    await send('Browser.setDownloadBehavior',{behavior:'deny',eventsEnabled:true});
     const evaluate = async expression => {
         const result = await page('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
         assert.ok(!result.exceptionDetails, result.exceptionDetails?.exception?.description || result.exceptionDetails?.text);
@@ -812,7 +822,7 @@ try {
         }
     }
     for (const [route, category, count, column] of [
-        ['materials','consumable',3,'outgoing'], ['spare-parts','spare_part',3,'specifications'],
+        ['materials','consumable',3,'outgoing'], ['spare-parts','spare_part',3,'unit'],
         ['tools','ccdc',2,'warehouses'], ['fixed-assets','fixed_asset',2,'decisions'], ['other-products','other',2,'tracking_mode']
     ]) {
         const render = spawnSync(php, ['tests/home.php', `--${route}`, '--render'], { encoding: 'utf8', windowsHide: true });
@@ -856,6 +866,28 @@ try {
     assert.equal(await evaluate('importDialog.open && document.getElementById("import-detail-number").textContent==="PN-001"'),true,'Dashboard link must open the requested import.');
     await evaluate('importDialog.close()');
     assert.equal(await evaluate('document.querySelectorAll("[data-import]:not([hidden])").length'),10);
+    assert.equal(await evaluate(`document.querySelector('[data-import] .import-state').dataset.action`),'delete','Draft receipts need a delete action.');
+    assert.equal(await evaluate(`importRows[1].querySelector('.import-state').dataset.action`),'cancel','Confirmed receipts need a cancellation action.');
+    assert.equal(await evaluate(`importRows[2].querySelector('.import-state')===null`),true,'Cancelled receipts must remain read-only history.');
+    assert.equal(await evaluate(`importRows[3].querySelector('.import-state').disabled && importRows[3].querySelector('.import-state').title.includes('điều chuyển')`),true,'Transfer receipts must explain their blocked action.');
+    await evaluate(`importRows[0].querySelector('.import-state').click()`);
+    assert.equal(await evaluate(`importStateDialog.open && importStateForm.elements.action.value==='delete' && importStateForm.elements.id.value==='1' && importStateForm.elements.cancel_reason.disabled && document.getElementById('import-cancel-reason-label').hidden`),true,'Delete confirmation must target the selected draft and omit cancellation reason.');
+    const deletedPreview=await evaluate(`(async()=>{const original=submitManagementForm;let captured;submitManagementForm=async (...args)=>{captured=Object.fromEntries(new FormData(args[0]));await original(...args);};try{importStateForm.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));await new Promise(resolve=>setTimeout(resolve,0));return captured;}finally{submitManagementForm=original;}})()`);
+    assert.equal(deletedPreview.action,'delete');assert.equal(deletedPreview.id,'1');assert.equal('cancel_reason' in deletedPreview,false);
+    assert.equal(await evaluate(`!importStateDialog.open && importRows.length===12`),true,'Preview confirmation must not remove real or sample receipt records.');
+    await evaluate(`importRows[1].querySelector('.import-state').click()`);
+    assert.equal(await evaluate(`importStateForm.elements.action.value==='cancel' && importStateForm.elements.cancel_reason.required && !importStateForm.checkValidity()`),true,'Cancellation must require a reason.');
+    for(const [width,height] of [[1440,1000],[390,844],[320,568],[844,390]]){
+        await page('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
+        await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+        assert.equal(await evaluate(`(()=>{const header=importStateDialog.querySelector('header'),footer=importStateDialog.querySelector('footer'),body=importStateDialog.querySelector('.account-dialog-body'),before=[header.getBoundingClientRect().top,footer.getBoundingClientRect().top];body.scrollTop=body.scrollHeight;return header.getBoundingClientRect().top===before[0] && footer.getBoundingClientRect().top===before[1] && footer.getBoundingClientRect().bottom<=innerHeight && importStateDialog.scrollWidth<=importStateDialog.clientWidth && importStateDialog.scrollHeight<=importStateDialog.clientHeight+1;})()`),true,'Receipt action dialogs must keep header/actions fixed and scroll only their bodies.');
+        await evaluate(`importStateDialog.querySelector('.account-dialog-body').scrollTop=0`);
+        const stateShot=await page('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});writeFileSync(join(outputDir,`import-cancel-${width}x${height}.png`),Buffer.from(stateShot.data,'base64'));
+    }
+    await evaluate(`importStateForm.elements.cancel_reason.value='Sai thông tin hóa đơn';`);
+    const cancelledPreview=await evaluate(`(async()=>{const original=submitManagementForm;let captured;submitManagementForm=async (...args)=>{captured=Object.fromEntries(new FormData(args[0]));await original(...args);};try{importStateForm.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));await new Promise(resolve=>setTimeout(resolve,0));return captured;}finally{submitManagementForm=original;}})()`);
+    assert.equal(cancelledPreview.action,'cancel');assert.equal(cancelledPreview.id,'2');assert.equal(cancelledPreview.cancel_reason,'Sai thông tin hóa đơn');
+    assert.equal(await evaluate(`!importStateDialog.open && JSON.parse(importRows[1].dataset.import).status==='confirmed'`),true,'Preview cancellation must not change receipt status.');
     assert.equal(await evaluate(`Boolean(document.querySelector('.navigation a[href="index.php?page=imports"].active[aria-current=page]')?.closest('details[open]'))`),true,'Import sidebar must link to the real page and expand its group.');
     await evaluate('importNext.click()');
     assert.equal(await evaluate('document.querySelectorAll("[data-import]:not([hidden])").length'),2);
@@ -875,8 +907,73 @@ try {
     assert.equal(await evaluate('JSON.parse(document.querySelector("[data-import]:not([hidden])").dataset.import).number'),'PN-001');
     await evaluate('document.querySelector("[data-import]:not([hidden]) .import-details").click()');
     assert.equal(await evaluate('document.querySelectorAll("#import-item-rows tr").length'),14);
+    assert.equal(await evaluate('document.getElementById("import-excel").disabled'),true,'Sample receipts must not download real database records.');
     assert.equal(await evaluate('document.querySelector("#import-item-rows td").textContent.includes("<script>")'),true);
-    assert.equal(await evaluate('document.querySelector("#import-item-rows td:nth-child(3)").textContent.includes("12.345.678.901.234,123456")'),true);
+    assert.equal(await evaluate('document.querySelector("#import-item-rows td:nth-child(4)").textContent.includes("12.345.678.901.234,123456")'),true);
+    assert.equal(await evaluate('document.querySelectorAll("#import-item-rows tr:first-child td").length'),7,'Receipt rows must include a separate image column.');
+    await evaluate('document.getElementById("import-edit").click()');
+    assert.equal(await evaluate('document.querySelectorAll("#import-item-rows [data-field=product_name]").length'),14);
+    assert.equal(await evaluate('document.querySelector("#import-item-rows [data-field=unit_price]").value'),'12345678901234.123456','Editing must use exact database values, without display separators.');
+    await evaluate(`(() => { const row=document.querySelector('#import-item-rows tr'),quantity=row.querySelector('[data-field=received_quantity]'),price=row.querySelector('[data-field=unit_price]');
+        price.value='2.000001';quantity.value='3.123456';quantity.dispatchEvent(new Event('input',{bubbles:true})); })()`);
+    assert.equal(await evaluate('document.querySelector("#import-item-rows [data-field=amount_before_tax]").value'),'6.246915');
+    assert.equal(await evaluate('document.querySelector("#import-item-rows [data-field=tax_amount]").value'),'0.624691','Receipt editing must use six-decimal arithmetic.');
+    const editPayload=await evaluate(`(async () => { const original=submitManagementForm;let captured;submitManagementForm=async form=>{captured=JSON.parse(new FormData(form).get('items'));};
+        try { importEditForm.dispatchEvent(new Event('submit',{cancelable:true,bubbles:true}));await new Promise(resolve=>setTimeout(resolve,0));return captured; }finally{submitManagementForm=original;} })()`);
+    assert.equal(editPayload.length,14);assert.equal(editPayload[0].id,'1');assert.equal(editPayload[0].received_quantity,'3.123456');assert.equal(editPayload[0].decision,'pending');
+    await evaluate('importEditDirty=false;document.getElementById("import-edit-cancel").click()');
+    assert.equal(await evaluate('document.querySelector("#import-item-rows td:nth-child(4)").textContent.includes("12.345.678.901.234,123456")'),true,'Cancel must restore the original snapshot.');
+    let previewPdf='%PDF-1.4\n';const pdfOffsets=[0];
+    const red='1 0 0 rg 0 0 200 200 re f\n',green='0 1 0 rg 0 0 200 200 re f\n';
+    for(const object of ['<< /Type /Catalog /Pages 2 0 R >>','<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>','<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>',
+        `<< /Length ${red.length} >>\nstream\n${red}endstream`,'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 6 0 R >>',`<< /Length ${green.length} >>\nstream\n${green}endstream`]) {
+        pdfOffsets.push(Buffer.byteLength(previewPdf));previewPdf+=`${pdfOffsets.length-1} 0 obj\n${object}\nendobj\n`;
+    }
+    const xref=Buffer.byteLength(previewPdf);previewPdf+=`xref\n0 ${pdfOffsets.length}\n0000000000 65535 f \n`+pdfOffsets.slice(1).map(offset=>String(offset).padStart(10,'0')+' 00000 n \n').join('')+`trailer\n<< /Size ${pdfOffsets.length} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+    const previewBytes=process.env.RECEIPT_PDF_PATH?readFileSync(process.env.RECEIPT_PDF_PATH):Buffer.from(previewPdf),downloadsBeforePdf=downloads.length;
+    let pdfPreviewFails=false;const pdfPreviewRequests=[];
+    const receiptPreviewHandler=async event=>{
+        const message=JSON.parse(event.data);if(message.method!=='Fetch.requestPaused')return;
+        pdfPreviewRequests.push(message.params);
+        const response=pdfPreviewFails?{ok:false,message:'Không tải được PDF.'}:{ok:true,name:'Hóa đơn PDF kiểm tra.pdf',data:previewBytes.toString('base64')};
+        await page('Fetch.fulfillRequest',{requestId:message.params.requestId,responseCode:pdfPreviewFails?503:200,responseHeaders:[
+            {name:'Content-Type',value:'application/json; charset=utf-8'}],body:Buffer.from(JSON.stringify(response)).toString('base64')});
+    };
+    socket.addEventListener('message',receiptPreviewHandler);
+    await page('Fetch.enable',{patterns:[{urlPattern:'*index.php?page=import-file&id=preview-fixture*'}]});
+    await evaluate(`importDialog.close();const bill=JSON.parse(importRows[0].dataset.import);bill.attachments=[{id:'preview-fixture',original_name:'Hóa đơn PDF kiểm tra.pdf'}];openImport(bill);importImageIndex=2;document.querySelector('#import-attachments button').click()`);
+    for(let attempt=0;attempt<150;attempt++){
+        if(await evaluate(`document.getElementById('import-pdf-frame').contentWindow.PDFViewerApplication?.pdfViewer?.getPageView(0)?.renderingState===3`))break;
+        await new Promise(resolve=>setTimeout(resolve,100));
+    }
+    assert.equal(await evaluate('importImageDialog.open && !document.getElementById("import-pdf-frame").hidden && importImageFull.hidden'),true,'PDF must open inside the web dialog.');
+    assert.equal(await evaluate(`importImageIndex===0 && importImageDialog.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft',bubbles:true,cancelable:true}))`),true,'PDF viewing must reset photo navigation and preserve native arrow keys.');
+    const pdfShot=await page('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});writeFileSync(join(outputDir,'import-pdf-viewer.png'),Buffer.from(pdfShot.data,'base64'));
+    const pdfPixels=await evaluate(`(() => {const canvas=document.getElementById('import-pdf-frame').contentDocument?.querySelector('.page[data-page-number="1"][data-loaded="true"] canvas');
+        if(!canvas)return null;const pixels=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data;let painted=0;for(let i=0;i<pixels.length;i+=4)if(pixels[i+3]>0 && (pixels[i]<240 || pixels[i+1]<240 || pixels[i+2]<240))painted++;return painted;})()`);
+    assert.ok(pdfPixels>500,'PDF.js must paint PDF content, not merely load a PDF MIME response.');
+    assert.equal(await evaluate(`document.getElementById('import-pdf-frame').contentWindow.PDFViewerApplicationOptions.get('enableScripting')`),false,'PDF scripting must remain disabled.');
+    assert.equal(await evaluate(`getComputedStyle(document.getElementById('import-pdf-frame').contentDocument.getElementById('secondaryOpenFile')).display`),'none','Linked receipt viewer must not ask the user to choose an unrelated PDF.');
+    assert.equal(await evaluate(`document.getElementById('import-pdf-frame').contentDocument.getElementById('fileInput').disabled`),true,'The linked viewer must disable the external file picker.');
+    assert.equal(pdfPreviewRequests.length,1,'The linked PDF must be loaded once, as data.');
+    assert.ok(['Fetch','XHR'].includes(pdfPreviewRequests[0].resourceType),'Preview must use a data request, not navigate the browser to a PDF file URL.');
+    assert.equal(pdfPreviewRequests[0].request.headers.Accept,'application/json');
+    assert.equal(await evaluate(`new URL(document.getElementById('import-pdf-frame').src).searchParams.get('file')`),'','PDF.js must receive bytes instead of fetching a PDF URL that IDM can capture.');
+    if(!process.env.RECEIPT_PDF_PATH){
+        assert.equal(await evaluate(`document.getElementById('import-pdf-frame').contentWindow.PDFViewerApplication.pagesCount`),2);
+        await evaluate(`document.getElementById('import-pdf-frame').contentWindow.PDFViewerApplication.page=2`);
+        for(let attempt=0;attempt<100;attempt++){if(await evaluate(`document.getElementById('import-pdf-frame').contentWindow.PDFViewerApplication.pdfViewer.getPageView(1).renderingState===3`))break;await new Promise(resolve=>setTimeout(resolve,100));}
+        assert.equal(await evaluate(`(() => {const canvas=document.getElementById('import-pdf-frame').contentDocument.querySelector('.page[data-page-number="2"] canvas'),pixel=canvas.getContext('2d').getImageData(Math.floor(canvas.width/2),Math.floor(canvas.height/2),1,1).data;return pixel[1]>230 && pixel[0]<30 && pixel[2]<30;})()`),true,'PDF page navigation must render the actual second page.');
+    }
+    assert.equal(downloads.length,downloadsBeforePdf,'Viewing PDF must never start a download, even with the browser PDF plugin disabled.');
+    assert.equal(await evaluate(`(() => { const body=importImageDialog.querySelector('.account-dialog-body'),footer=importImageDialog.querySelector('footer');return body.scrollHeight<=body.clientHeight+1 && footer.getBoundingClientRect().bottom<=innerHeight; })()`),true,'PDF should fit the dialog body while its actions stay visible.');
+    assert.equal(await evaluate('document.getElementById("import-file-download").getAttribute("href")'),'index.php?page=import-file&id=preview-fixture');
+    pdfPreviewFails=true;
+    await evaluate(`importImageDialog.close();showImportPdf('index.php?page=import-file&id=preview-fixture','Hóa đơn PDF kiểm tra.pdf')`);
+    for(let attempt=0;attempt<100;attempt++){if(await evaluate(`!document.getElementById('import-image-error').hidden`))break;await new Promise(resolve=>setTimeout(resolve,100));}
+    assert.equal(await evaluate(`!document.getElementById('import-image-error').hidden && document.getElementById('import-pdf-frame').hidden && document.getElementById('import-pdf-loading').hidden`),true,'Failed PDF loading must show an error, not a blank viewer or file picker.');
+    await evaluate('importImageDialog.close();importDialog.close()');
+    await page('Fetch.disable');socket.removeEventListener('message',receiptPreviewHandler);
     for (const [width,height] of [[1440,1000],[390,844],[320,568],[844,390]]) {
         await evaluate('importDialog.close()');
         await page('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
@@ -906,6 +1003,19 @@ try {
         await new Promise(resolve=>setTimeout(resolve,100));
     }
     assert.equal(await evaluate('importLines.children.length'),1);
+    const photoPng=readFileSync('public/assets/images/company-logo.png').toString('base64');
+    await evaluate(`(()=>{const picker=importLines.firstElementChild.querySelector('[data-import-images]'),files=new DataTransfer(),bytes=Uint8Array.from(atob(${JSON.stringify(photoPng)}),char=>char.charCodeAt(0));files.items.add(new File([bytes],'first.png',{type:'image/png'}));files.items.add(new File([bytes],'second.png',{type:'image/png'}));picker.files=files.files;picker.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    assert.equal(await evaluate('importLines.querySelectorAll(".import-image-preview").length'),2,'Multiple optional photos must have previews.');
+    await evaluate('Promise.all([...importLines.querySelectorAll(".import-image-previews img")].map(image=>image.decode()))');
+    await evaluate('importLines.querySelector(".import-image-preview>button").click()');
+    assert.equal(await evaluate('importImageDialog.open'),true,'Photo previews must enlarge in a native dialog.');
+    await evaluate('document.getElementById("import-image-next").click()');
+    assert.equal(await evaluate('document.getElementById("import-image-caption").textContent.startsWith("2 / 2")'),true,'Photo viewer must navigate between selected photos.');
+    await evaluate('importImageFull.decode()');
+    await evaluate('importImageDialog.close()');
+    await evaluate('importLines.querySelector(".import-image-remove").click()');
+    assert.equal(await evaluate('importLines.querySelectorAll(".import-image-preview").length'),1,'A photo can be removed without deleting its receipt row.');
+    await evaluate(`(async()=>{const first=importLines.firstElementChild,second=addImportLine(),files=new DataTransfer(),bytes=Uint8Array.from(atob(${JSON.stringify(photoPng)}),char=>char.charCodeAt(0));files.items.add(new File([bytes],'second-row.png',{type:'image/png'}));const picker=second.querySelector('[data-import-images]');picker.files=files.files;picker.dispatchEvent(new Event('change',{bubbles:true}));await Promise.all([...second.querySelectorAll('.import-image-previews img')].map(image=>image.decode()));first.querySelector('.remove-import-line').click();let payload;const original=submitManagementForm;submitManagementForm=(form,dialog,notice,data)=>{payload=data;};try{importCreateForm.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));if(payload.getAll('images[0][]').length!==1 || payload.has('images[1][]') || payload.get('image_count')!=='1' || payload.get('form_complete')!=='1')throw new Error('Removed rows must reindex photo uploads to the final receipt line order.');}finally{submitManagementForm=original;clearImportPhotos(second);second.remove();addImportLine();}})()`);
     assert.equal(await evaluate('importCreateForm.elements.warehouse.options.length'),2,'Inactive warehouse must be excluded.');
     await evaluate(`for(const [key,value] of Object.entries({name:'New product',unit:'Piece',quantity:'1.123456',unit_price:'2.5',tax_code:'10%'}))importLines.firstElementChild.querySelector('[data-field='+key+']').value=value; updateImportTotals()`);
     assert.equal(await evaluate('document.getElementById("import-total-after").textContent'),'3,089504 ₫','Preview totals must use exact decimals.');
@@ -915,8 +1025,8 @@ try {
     await evaluate('supplierSelect.value="1";configureImportSupplier()');
     assert.equal(await evaluate('importCreateForm.elements.tax_code.readOnly'),true);
     await evaluate(`applyImportInvoice({invoice_number:'HD-TEST',invoice_series:'C26T',invoice_date:'2026-10-10',supplier_name:'Seller',tax_code:'1234567890',items:[
-        {product_id:'',code:'HH-001',name:'Invoice item',unit:'Chiếc',category:'other',tracking_mode:'quantity',quantity:'2',unit_price:'2',tax_code:'8%',tax_amount:'',specifications:'',note:''},
-        {product_id:'',code:'XML-NEW',name:'Service <script>',unit:'Lần',category:'other',tracking_mode:'none',quantity:'',unit_price:'10',tax_code:'KCT',tax_amount:'',specifications:'',note:''}]})`);
+        {product_id:'',code:'HH-001',name:'Invoice item',unit:'Chiếc',category:'other',tracking_mode:'quantity',quantity:'2',unit_price:'2',tax_code:'8%',tax_amount:'',note:''},
+        {product_id:'',code:'XML-NEW',name:'Service <script>',unit:'Lần',category:'other',tracking_mode:'none',quantity:'',unit_price:'10',tax_code:'KCT',tax_amount:'',note:''}]})`);
     assert.equal(await evaluate('importLines.children.length'),2);
     assert.equal(await evaluate('importLines.firstElementChild.querySelector("[data-field=product_id]").value'),'1','XML must match an existing product code.');
     assert.equal(await evaluate('importLines.lastElementChild.querySelector("[data-field=quantity]").disabled'),true);
@@ -926,7 +1036,7 @@ try {
     assert.equal(await evaluate('document.getElementById("import-create-notice").hidden'),false,'Preview must not save business data.');
     await evaluate('importLines.lastElementChild.querySelector(".remove-import-line").click()');
     assert.equal(await evaluate('importLines.children.length'),1);
-    await evaluate(`applyImportInvoice({invoice_number:'00000548',invoice_series:'C26TNA',invoice_date:'2026-09-29',supplier_name:'Test supplier',invoice_before_tax:'2212963',invoice_tax:'177037',invoice_after_tax:'2390000',items:[{product_id:'',code:'',name:'Test kettle',unit:'Cái',category:'other',tracking_mode:'quantity',quantity:'1',unit_price:'2212962.96',amount_before_tax:'2212963',tax_code:'8%',tax_amount:'177037',specifications:'',note:''}]})`);
+    await evaluate(`applyImportInvoice({invoice_number:'00000548',invoice_series:'C26TNA',invoice_date:'2026-09-29',supplier_name:'Test supplier',invoice_before_tax:'2212963',invoice_tax:'177037',invoice_after_tax:'2390000',items:[{product_id:'',code:'',name:'Test kettle',unit:'Cái',category:'other',tracking_mode:'quantity',quantity:'1',unit_price:'2212962.96',amount_before_tax:'2212963',tax_code:'8%',tax_amount:'177037',note:''}]})`);
     assert.equal(await evaluate('importCreateForm.elements.invoice_tax.value'),'177037');
     assert.equal(await evaluate('importCreateForm.elements.invoice_number.value'),'00000548');
     assert.equal(await evaluate('document.getElementById("import-total-after").textContent'),'2.390.000 ₫','Explicit XML line/tax values must preserve the invoice rounding.');
@@ -946,7 +1056,7 @@ try {
     // Stub only the transport so the preview fixture never sends business requests.
     const uploadCheck=await evaluate(`(async()=>{
         const previousFetch=window.fetch;
-        const invoice={invoice_number:'00000548',invoice_series:'C26TNA',invoice_date:'2026-09-29',supplier_name:'Test supplier',invoice_before_tax:'2212963',invoice_tax:'177037',invoice_after_tax:'2390000',items:[{product_id:'',code:'',name:'Test kettle',unit:'Cái',category:'other',tracking_mode:'quantity',quantity:'1',unit_price:'2212962.96',amount_before_tax:'2212963',tax_code:'8%',tax_amount:'177037',specifications:'',note:''}]};
+        const invoice={invoice_number:'00000548',invoice_series:'C26TNA',invoice_date:'2026-09-29',supplier_name:'Test supplier',invoice_before_tax:'2212963',invoice_tax:'177037',invoice_after_tax:'2390000',items:[{product_id:'',code:'',name:'Test kettle',unit:'Cái',category:'other',tracking_mode:'quantity',quantity:'1',unit_price:'2212962.96',amount_before_tax:'2212963',tax_code:'8%',tax_amount:'177037',note:''}]};
         let request;
         window.fetch=async(url,options)=>{
             request={url:String(url),method:options.method,action:options.body.get('action'),file:options.body.get('xml')?.name,csrf:options.body.get('csrf_token')};
@@ -1012,6 +1122,7 @@ try {
             assert.equal(await evaluate('document.getElementById("export-error").hidden'),false);
             await evaluate('document.getElementById("export-reset").click();openExport(JSON.parse(exportRows.find(row=>JSON.parse(row.dataset.export).id==="1").dataset.export))');
             assert.equal(await evaluate('document.querySelectorAll("#export-item-rows tr").length'),14);
+            assert.equal(await evaluate('document.getElementById("export-excel").disabled'),true,'Sample receipts must not download real database records.');
             assert.equal(await evaluate('document.getElementById("export-detail-receiver_name").textContent'),'Người nhận <script> 1');
             assert.equal(await evaluate('document.querySelector("#export-attachments a").getAttribute("href")'),'index.php?page=export-file&id=1');
             assert.equal(await evaluate('exportDialog.querySelectorAll("script").length'),0);

@@ -1,6 +1,23 @@
 const importCreateForm=document.getElementById('import-create-form'), importLines=document.getElementById('import-lines');
 const xmlInput=document.getElementById('import-xml'), xmlReplaceDialog=document.getElementById('xml-replace-dialog');
 let xmlPending=null, xmlLoading=false;
+const importPhotos=new WeakMap();
+function clearImportPhotos(row) {
+    for(const photo of importPhotos.get(row)||[])URL.revokeObjectURL(photo.url);
+    importPhotos.delete(row);
+}
+function renderImportPhotos(row) {
+    const photos=importPhotos.get(row)||[], gallery=row.querySelector('[data-image-previews]');gallery.replaceChildren();
+    photos.forEach((photo,index)=>{
+        const card=document.createElement('div');card.className='import-image-preview';
+        const view=document.createElement('button');view.type='button';view.title='Xem '+photo.file.name;
+        const image=document.createElement('img');image.src=photo.url;image.alt=photo.file.name;view.append(image);
+        view.addEventListener('click',()=>showImportImages(photos.map(p=>({url:p.url,name:p.file.name})),index,importLineData(row).name));
+        const remove=document.createElement('button');remove.type='button';remove.className='import-image-remove';remove.textContent='×';remove.setAttribute('aria-label','Bỏ ảnh '+photo.file.name);
+        remove.addEventListener('click',()=>{URL.revokeObjectURL(photo.url);photos.splice(index,1);renderImportPhotos(row);});
+        card.append(view,remove);gallery.append(card);
+    });
+}
 function importLineData(row) {return Object.fromEntries([...row.querySelectorAll('[data-field]')].map(input=>[input.dataset.field,input.value.trim()]));}
 function updateImportTotals() {
     let total=0n,taxTotal=0n,valid=true;
@@ -26,7 +43,7 @@ function configureImportLine(row,fill=false) {
     const select=row.querySelector('[data-field=product_id]'), product=select.selectedOptions[0].dataset.product;
     if (product && fill) {
         const data=JSON.parse(product);
-        for (const key of ['code','name','unit','category','tracking_mode','specifications','version']) row.querySelector(`[data-field=${key}]`).value=data[key] || '';
+        for (const key of ['code','name','unit','category','tracking_mode','version']) row.querySelector(`[data-field=${key}]`).value=data[key] || '';
     }
     for (const key of ['code','name','unit']) row.querySelector(`[data-field=${key}]`).readOnly=Boolean(product);
     for (const key of ['category','tracking_mode']) row.querySelector(`[data-field=${key}]`).disabled=Boolean(product);
@@ -39,12 +56,25 @@ function addImportLine(data={}) {
     const row=document.getElementById('import-line-template').content.firstElementChild.cloneNode(true);
     for (const [key,value] of Object.entries(data)) {const input=row.querySelector(`[data-field=${key}]`);if(input)input.value=value ?? '';}
     importLines.append(row);configureImportLine(row,Boolean(data.product_id));
+    importPhotos.set(row,[]);
+    const picker=row.querySelector('[data-import-images]');
+    row.querySelector('[data-pick-images]').addEventListener('click',()=>picker.click());
+    picker.addEventListener('change',()=>{
+        const files=[...picker.files],photos=importPhotos.get(row);
+        const total=[...importLines.children].reduce((n,line)=>n+(importPhotos.get(line)?.length||0),0);
+        const bytes=[...importLines.children].reduce((n,line)=>n+(importPhotos.get(line)||[]).reduce((sum,photo)=>sum+photo.file.size,0),0)+files.reduce((sum,file)=>sum+file.size,0);
+        if(photos.length+files.length>5 || total+files.length>16)showNotification('Tối đa 5 ảnh mỗi dòng và 16 ảnh mỗi phiếu.','warning');
+        else if(bytes>32*1024*1024)showNotification('Tổng ảnh của phiếu tối đa 32 MB.','warning');
+        else if(files.some(file=>file.size>5*1024*1024 || !/\.(jpe?g|png|webp)$/i.test(file.name)))showNotification('Chọn ảnh JPG, PNG hoặc WebP, mỗi ảnh tối đa 5 MB.','warning');
+        else {photos.push(...files.map(file=>({file,url:URL.createObjectURL(file)})));renderImportPhotos(row);}
+        picker.value='';
+    });
     return row;
 }
 document.getElementById('add-import-line').addEventListener('click',()=>{const row=addImportLine();row?.querySelector('[data-field=name]').focus();});
 importLines.addEventListener('input',()=>updateImportTotals());
 importLines.addEventListener('change',event=>{if(['product_id','tracking_mode'].includes(event.target.dataset.field))configureImportLine(event.target.closest('.import-line'),event.target.dataset.field==='product_id');});
-importLines.addEventListener('click',event=>{if(event.target.closest('.remove-import-line')){event.target.closest('.import-line').remove();updateImportTotals();}});
+importLines.addEventListener('click',event=>{if(event.target.closest('.remove-import-line')){const row=event.target.closest('.import-line');clearImportPhotos(row);row.remove();updateImportTotals();}});
 const supplierSelect=importCreateForm.elements.supplier_id;
 function configureImportSupplier(fill=true) {
     const data=supplierSelect.selectedOptions[0].dataset.supplier;
@@ -65,7 +95,7 @@ function applyImportInvoice(invoice) {
     }
     configureImportSupplier(false);
     const products=[...document.getElementById('import-line-template').content.querySelector('[data-field=product_id]').options].filter(option=>option.dataset.product).map(option=>JSON.parse(option.dataset.product));
-    importLines.replaceChildren();
+    [...importLines.children].forEach(clearImportPhotos);importLines.replaceChildren();
     for(const item of invoice.items) {
         const byCode=products.filter(product=>item.code && product.code===item.code);
         const candidates=byCode.length?byCode:products.filter(product=>product.name===item.name && product.unit===item.unit && product.tracking_mode===item.tracking_mode);
@@ -86,7 +116,7 @@ xmlInput.addEventListener('change',async()=>{
         const response=await fetch(endpoint,{method:'POST',body,headers:{Accept:'application/json'},credentials:'same-origin'});
         if(!response.headers.get('content-type')?.includes('application/json'))throw new Error('Không nhận được nội dung XML. Hãy kiểm tra phiên đăng nhập và kết nối.');
         const result=await response.json();if(!response.ok || !result.ok)throw new Error(result.message || 'Không đọc được XML.');
-        if([...importLines.children].some(row=>{const data=importLineData(row);return data.name || data.code || data.product_id;}) || importCreateForm.elements.invoice_number.value || importCreateForm.elements.supplier_name.value) {
+        if([...importLines.children].some(row=>{const data=importLineData(row);return data.name || data.code || data.product_id || importPhotos.get(row)?.length;}) || importCreateForm.elements.invoice_number.value || importCreateForm.elements.supplier_name.value) {
             xmlPending=result.invoice;xmlReplaceDialog.returnValue='';xmlReplaceDialog.showModal();
         } else {applyImportInvoice(result.invoice);xmlInput.value='';}
     } catch(failure){error.textContent=failure.message;error.hidden=false;showNotification(failure.message,'warning');xmlInput.value='';}
@@ -95,6 +125,10 @@ xmlInput.addEventListener('change',async()=>{
 importCreateForm.addEventListener('submit',event=>{
     event.preventDefault();if(xmlLoading || xmlReplaceDialog.open){showNotification('Kiểm tra xong dữ liệu XML trước khi lưu.','warning');return;}
     importCreateForm.elements.items.value=JSON.stringify([...importLines.children].map(importLineData));
-    submitManagementForm(importCreateForm,{close(){}},'import-create-notice');
+    const payload=new FormData(importCreateForm);let count=0;
+    [...importLines.children].forEach((row,index)=>{for(const photo of importPhotos.get(row)||[]){payload.append(`images[${index}][]`,photo.file,photo.file.name);count++;}});
+    payload.set('image_count',String(count));payload.set('form_complete','1');
+    submitManagementForm(importCreateForm,{close(){}},'import-create-notice',payload);
 });
+window.addEventListener('pagehide',event=>{if(!event.persisted)[...importLines.children].forEach(clearImportPhotos);});
 addImportLine();

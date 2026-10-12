@@ -52,7 +52,7 @@ function parseImportXml(string $contents): array
         $result['items'][] = ['product_id' => '', 'code' => $text($line, 'MHHDVu'), 'name' => $name, 'category' => 'other', 'unit' => $text($line, 'DVTinh') ?: 'Lần',
             'tracking_mode' => $quantity !== '' && bccomp(importDecimal($quantity), '0', 6) > 0 ? 'quantity' : 'none', 'quantity' => $quantity ?: '',
             'unit_price' => $text($line, 'DGia') ?: '0', 'amount_before_tax' => $text($line, 'ThTien') ?: '', 'tax_code' => $text($line, 'TSuat'),
-            'tax_amount' => $text($line, 'TThue'), 'specifications' => '', 'note' => ''];
+            'tax_amount' => $text($line, 'TThue'), 'note' => ''];
     }
     if (!$result['items'] || count($result['items']) > 200) throw new DomainException('XML phải có từ 1 đến 200 dòng hàng.');
     return $result;
@@ -80,7 +80,8 @@ function saveImport(PDO $pdo, string $actorId, array $input, array $files = []):
     $series = managementText($input, 'invoice_series', 50);
     $invoiceDate = importDate($input, 'invoice_date', false);
     $sender = managementText($input, 'sender_name', 200);
-    $pdf = receivePdf($files); $stored = null;
+    $pdf = receivePdf($files); $stored = null; $storedImages = [];
+    $images = receiveImportImages($files, $input, count($items));
     $pdo->beginTransaction();
     try {
         $pdo->query('SELECT id FROM users ORDER BY id FOR UPDATE')->fetchAll();
@@ -121,7 +122,7 @@ function saveImport(PDO $pdo, string $actorId, array $input, array $files = []):
             } else {
                 $product = ['code' => managementText($item, 'code', 64), 'name' => managementText($item, 'name', 255, true),
                     'category' => managementText($item, 'category', 20, true), 'unit' => managementText($item, 'unit', 50, true),
-                    'specifications' => managementText($item, 'specifications', 16000) ?: null, 'tracking_mode' => managementText($item, 'tracking_mode', 10, true)];
+                    'tracking_mode' => managementText($item, 'tracking_mode', 10, true)];
                 if (!isset(productCategories()[$product['category']]) || !in_array($product['tracking_mode'], ['quantity', 'none'], true)) throw new DomainException('Nhóm hàng hoặc cách theo dõi không hợp lệ.');
                 $key = json_encode($product, JSON_THROW_ON_ERROR);
                 if (isset($newProducts[$key])) {
@@ -130,7 +131,7 @@ function saveImport(PDO $pdo, string $actorId, array $input, array $files = []):
                     if ($product['code'] === '') $product['code'] = 'HH-' . strtoupper(bin2hex(random_bytes(6)));
                     $stmt = $pdo->prepare('SELECT id FROM products WHERE code=?'); $stmt->execute([$product['code']]);
                     if ($stmt->fetchColumn()) throw new DomainException('Mã hàng đã tồn tại. Hãy chọn hàng có sẵn thay vì tạo mới.');
-                    $pdo->prepare('INSERT INTO products (code,name,category,unit,specifications,tracking_mode,created_by) VALUES (?,?,?,?,?,?,?)')->execute([...array_values($product), $actorId]);
+                    $pdo->prepare('INSERT INTO products (code,name,category,unit,tracking_mode,created_by) VALUES (?,?,?,?,?,?)')->execute([...array_values($product), $actorId]);
                     $productId = $pdo->lastInsertId(); $audit('products', $productId, $product);
                     $newProducts[$key] = [$productId, $product];
                 }
@@ -149,7 +150,7 @@ function saveImport(PDO $pdo, string $actorId, array $input, array $files = []):
             $beforeTax = importDecimal(bcadd($beforeTax, $amount, 6)); $afterTax = importDecimal(bcadd($afterTax, bcadd($amount, $taxAmount, 6), 6));
             $lines[] = ['product_id' => $productId, 'received_quantity' => $quantity, 'unit_price' => $price, 'amount_before_tax' => $amount, 'tax_code' => $tax ?: null,
                 'tax_amount' => $taxAmount, 'product_name' => $product['name'], 'unit' => $product['unit'],
-                'specifications' => managementText($item, 'specifications', 16000) ?: ($product['specifications'] ?? null), 'note' => managementText($item, 'note', 16000) ?: null];
+                'note' => managementText($item, 'note', 16000) ?: null];
         }
         foreach (['invoice_before_tax' => $beforeTax, 'invoice_tax' => bcsub($afterTax, $beforeTax, 6), 'invoice_after_tax' => $afterTax] as $field => $total) {
             $expected = managementText($input, $field, 32);
@@ -158,24 +159,166 @@ function saveImport(PDO $pdo, string $actorId, array $input, array $files = []):
         $header = [$warehouse, $number, $date, $type, $supplierId, $supplierName ?: null, $invoice ?: null, $series ?: null, $invoiceDate, $sender ?: null, $beforeTax, $afterTax, $status, $actorId];
         $pdo->prepare('INSERT INTO import_bill (warehouse_id,number,received_date,receipt_type,supplier_id,supplier_name,invoice_number,invoice_series,invoice_date,sender_name,total_before_tax,total_after_tax,status,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute($header);
         $billId = $pdo->lastInsertId();
-        $stmt = $pdo->prepare("INSERT INTO import_bill_details (import_bill_id,product_id,received_quantity,unit_price,amount_before_tax,tax_code,tax_amount,product_name,unit,specifications,note,decision_status,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,'pending',?)");
-        foreach ($lines as $line) $stmt->execute([$billId, ...array_values($line), $actorId]);
-        $stored = storePdfAttachment($pdo, $pdf, 'import_bill_id', $billId, $actorId);
-        $audit('import_bill', $billId, ['number' => $number, 'warehouse_id' => $warehouse, 'received_date' => $date, 'status' => $status, 'total_before_tax' => $beforeTax, 'total_after_tax' => $afterTax, 'items' => $lines, 'pdf' => $pdf['name'] ?? null]);
+        $stmt = $pdo->prepare("INSERT INTO import_bill_details (import_bill_id,product_id,received_quantity,unit_price,amount_before_tax,tax_code,tax_amount,product_name,unit,note,decision_status,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,'pending',?)");
+        foreach ($lines as $index => $line) {
+            $stmt->execute([$billId, ...array_values($line), $actorId]);
+            $detailId = $pdo->lastInsertId();
+            foreach ($images[$index] ?? [] as $image) $storedImages[] = storeAttachment($pdo, $image, 'import_bill_detail_id', $detailId, $actorId);
+        }
+        $stored = storeAttachment($pdo, $pdf, 'import_bill_id', $billId, $actorId);
+        $audit('import_bill', $billId, ['number' => $number, 'warehouse_id' => $warehouse, 'received_date' => $date, 'status' => $status, 'total_before_tax' => $beforeTax, 'total_after_tax' => $afterTax, 'items' => $lines, 'pdf' => $pdf['name'] ?? null, 'images'=>array_map(static fn($photos)=>array_column($photos,'name'), $images)]);
         $pdo->commit();
         return 'Đã lưu phiếu nhập ' . $number . ($status === 'confirmed' ? ' và cập nhật tồn kho.' : ' ở trạng thái nháp.');
     } catch (Throwable $error) {
         if ($pdo->inTransaction()) $pdo->rollBack();
         if ($stored !== null && is_file($stored)) unlink($stored);
+        foreach ($storedImages as $path) if (is_file($path)) unlink($path);
         if ($error instanceof PDOException && ($error->errorInfo[1] ?? 0) === 1062) throw new DomainException('Số phiếu hoặc mã hàng đã tồn tại. Hãy kiểm tra trước khi lưu lại.');
         throw $error;
     }
+}
+function importVersion(array $bill, array $items): string
+{
+    return hash('sha256', json_encode([$bill['updated_at'], array_map(static fn($item) => [(string)$item['id'], $item['updated_at']], $items)], JSON_THROW_ON_ERROR));
+}
+function updateImport(PDO $pdo, string $actorId, array $input): string
+{
+    if (($input['action'] ?? '') !== 'update' || ($input['form_complete'] ?? '') !== '1') throw new DomainException('Biểu mẫu chỉnh sửa chưa đầy đủ. Hãy tải lại trang.');
+    $id = managementId($input['id'] ?? null);
+    try { $items = json_decode(managementText($input, 'items', 500000, true), true, 32, JSON_THROW_ON_ERROR); }
+    catch (JsonException $error) { throw new DomainException('Danh sách hàng hóa không hợp lệ.'); }
+    if (!is_array($items) || !array_is_list($items) || !$items || count($items) > 200) throw new DomainException('Danh sách hàng hóa không hợp lệ.');
+    $pdo->beginTransaction();
+    try {
+        $pdo->query('SELECT id FROM users ORDER BY id FOR UPDATE')->fetchAll();
+        $actor = findUser($pdo, 'id', $actorId);
+        $stmt = $pdo->prepare('SELECT * FROM import_bill WHERE id=? FOR UPDATE'); $stmt->execute([$id]); $bill = $stmt->fetch();
+        if (!$bill || !userCanSignIn($actor) || !(int)$actor['is_super_admin'] || warehousePermission($pdo, $actorId, (string)$bill['warehouse_id']) !== 'keeper') throw new DomainException('Phiếu không tồn tại hoặc bạn không có quyền sửa tại kho này.');
+        if ($bill['status'] === 'cancelled') throw new DomainException('Phiếu đã hủy chỉ được tra cứu.');
+        $stmt = $pdo->prepare('SELECT d.*,p.tracking_mode,p.unit AS catalogue_unit, EXISTS(SELECT 1 FROM export_bill_details e WHERE e.source_import_detail_id=d.id) AS stock_locked
+            FROM import_bill_details d LEFT JOIN products p ON p.id=d.product_id WHERE d.import_bill_id=? ORDER BY d.id FOR UPDATE');
+        $stmt->execute([$id]); $before = $stmt->fetchAll();
+        if (managementText($input, 'version', 64, true) !== importVersion($bill, $before)) throw new DomainException('Phiếu hoặc quyết định liên kết đã thay đổi. Hãy tải lại trang trước khi sửa.');
+        if (count($items) !== count($before)) throw new DomainException('Phải giữ đủ các dòng hàng đã lập; không thêm hoặc xóa dòng tại đây.');
+        $original = array_column($before, null, 'id'); $seen = []; $after = []; $total = '0'; $afterTax = '0';
+        foreach ($items as $item) {
+            if (!is_array($item)) throw new DomainException('Dòng hàng không hợp lệ.');
+            $lineId = managementId($item['id'] ?? null);
+            if (!isset($original[$lineId]) || isset($seen[$lineId])) throw new DomainException('Dòng hàng không thuộc phiếu này hoặc bị trùng.');
+            $seen[$lineId] = true; $old = $original[$lineId];
+            $quantity = $old['tracking_mode'] === 'none' || ($old['received_quantity'] === null && ($item['received_quantity'] ?? '') === '') ? null : importDecimal($item['received_quantity'] ?? '', true);
+            $unit = managementText($item, 'unit', 50, $old['unit'] !== null) ?: null;
+            $line = ['product_name'=>managementText($item, 'product_name', 255, true), 'unit'=>$unit,
+                'received_quantity'=>$quantity, 'unit_price'=>importDecimal($item['unit_price'] ?? ''), 'amount_before_tax'=>importDecimal($item['amount_before_tax'] ?? ''),
+                'tax_amount'=>importDecimal($item['tax_amount'] ?? ''), 'tax_code'=>managementText($item, 'tax_code', 32) ?: null];
+            // Existing exports and paired transfers retain their original lot quantity, unit and valuation.
+            if ($old['stock_locked'] || $old['source_export_detail_id'] !== null) {
+                foreach ($line as $field=>$value) if ($value !== $old[$field]) throw new DomainException('Dòng đã được dùng để xuất kho hoặc nhận điều chuyển: chỉ sửa quyết định và ghi chú.');
+            } elseif ($line['unit'] !== $old['unit'] && $old['tracking_mode'] === 'quantity' && $line['unit'] !== $old['catalogue_unit']) {
+                throw new DomainException('Đơn vị hàng theo dõi tồn kho phải khớp đơn vị trong danh mục; không tự chuyển đổi số lượng.');
+            }
+            $decision = managementText($item, 'decision', 20, true);
+            $decisionId = in_array($decision, ['pending','none'], true) ? null : managementId($decision);
+            $decisionStatus = $decisionId === null ? $decision : 'linked';
+            if ($decisionId !== null && (string)$old['decision_id'] !== $decisionId) {
+                if ($bill['status'] !== 'confirmed') throw new DomainException('Cần xác nhận phiếu trước khi gắn quyết định.');
+                $stmt = $pdo->prepare('SELECT warehouse_id FROM decisions WHERE id=? FOR UPDATE'); $stmt->execute([$decisionId]);
+                if ((string)$stmt->fetchColumn() !== (string)$bill['warehouse_id']) throw new DomainException('Quyết định không tồn tại hoặc thuộc kho khác.');
+            }
+            $line += ['decision_id'=>$decisionId, 'decision_status'=>$decisionStatus, 'note'=>managementText($item, 'note', 16000) ?: null];
+            if ($decisionStatus === 'none' && $line['note'] === null) throw new DomainException('Dòng không có quyết định cần ghi rõ lý do trong ghi chú.');
+            $total = importDecimal(bcadd($total, $line['amount_before_tax'], 6));
+            $afterTax = importDecimal(bcadd($afterTax, bcadd($line['amount_before_tax'], $line['tax_amount'], 6), 6));
+            $pdo->prepare('UPDATE import_bill_details SET product_name=?,unit=?,received_quantity=?,unit_price=?,amount_before_tax=?,tax_amount=?,tax_code=?,decision_id=?,decision_status=?,note=?,updated_at=GREATEST(CURRENT_TIMESTAMP(6),updated_at + INTERVAL 1 MICROSECOND) WHERE id=?')
+                ->execute([...array_values($line), $lineId]);
+            $after[] = ['id'=>$lineId] + $line;
+        }
+        $pdo->prepare('UPDATE import_bill SET total_before_tax=?,total_after_tax=?,updated_at=GREATEST(CURRENT_TIMESTAMP(6),updated_at + INTERVAL 1 MICROSECOND) WHERE id=?')->execute([$total, $afterTax, $id]);
+        $pdo->prepare("INSERT INTO audit_logs (user_id,warehouse_id,action,entity_type,entity_id,before_data,after_data,created_at) VALUES (?,?,'update','import_bill',?,?,?,UTC_TIMESTAMP(6) + INTERVAL 7 HOUR)")
+            ->execute([$actorId, $bill['warehouse_id'], $id, json_encode(['total_before_tax'=>$bill['total_before_tax'], 'total_after_tax'=>$bill['total_after_tax'], 'items'=>$before], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
+                json_encode(['total_before_tax'=>$total, 'total_after_tax'=>$afterTax, 'items'=>$after], JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)]);
+        $pdo->commit();
+        return 'Đã cập nhật hàng hóa trong phiếu nhập ' . $bill['number'] . '.';
+    } catch (Throwable $error) { if ($pdo->inTransaction()) $pdo->rollBack(); throw $error; }
+}
+function importRemovalReason(array $bill, array $items): string
+{
+    if ($bill['status'] === 'cancelled') return 'Phiếu đã hủy, được giữ lại để tra cứu lịch sử.';
+    if (($bill['warehouse_status'] ?? 'active') !== 'active') return 'Kho đã ngừng hoạt động.';
+    if ($bill['receipt_type'] === 'transfer') return 'Phiếu điều chuyển được giữ nguyên để đối chiếu giữa các kho.';
+    foreach ($items as $item) {
+        if ($item['source_export_detail_id'] ?? null) return 'Phiếu nhận điều chuyển được giữ nguyên để đối chiếu giữa các kho.';
+        if ((int)($item['stock_locked'] ?? 0)) return 'Phiếu có hàng đã liên kết phiếu xuất; không thể xóa hoặc hủy.';
+    }
+    return '';
+}
+function detachImportDecisions(PDO $pdo, string $billId): void
+{
+    $pdo->prepare("UPDATE import_bill_details SET decision_id=NULL,decision_status='pending',updated_at=GREATEST(CURRENT_TIMESTAMP(6),updated_at + INTERVAL 1 MICROSECOND) WHERE import_bill_id=? AND decision_id IS NOT NULL")->execute([$billId]);
+}
+function changeImportState(PDO $pdo, string $actorId, array $input): string
+{
+    $action = managementText($input, 'action', 20, true);
+    if (!in_array($action, ['delete','cancel'], true)) throw new DomainException('Thao tác phiếu nhập không hợp lệ.');
+    $id = managementId($input['id'] ?? null);
+    $reason = $action === 'cancel' ? managementText($input, 'cancel_reason', 16000, true) : null;
+    $paths = []; $pdo->beginTransaction();
+    try {
+        $pdo->query('SELECT id FROM users ORDER BY id FOR UPDATE')->fetchAll();
+        $actor = findUser($pdo, 'id', $actorId);
+        $stmt = $pdo->prepare('SELECT * FROM import_bill WHERE id=? FOR UPDATE'); $stmt->execute([$id]); $bill = $stmt->fetch();
+        if (!$bill || !userCanSignIn($actor) || !(int)$actor['is_super_admin'] || warehousePermission($pdo, $actorId, (string)$bill['warehouse_id']) !== 'keeper') throw new DomainException('Phiếu không tồn tại hoặc bạn không có quyền tại kho này.');
+        $stmt = $pdo->prepare('SELECT d.*,EXISTS(SELECT 1 FROM export_bill_details e WHERE e.source_import_detail_id=d.id) AS stock_locked
+            FROM import_bill_details d WHERE d.import_bill_id=? ORDER BY d.id FOR UPDATE'); $stmt->execute([$id]); $items = $stmt->fetchAll();
+        if (managementText($input, 'version', 64, true) !== importVersion($bill, $items)) throw new DomainException('Phiếu hoặc quyết định liên kết đã thay đổi. Hãy tải lại trang trước khi thực hiện.');
+        if ($blocked = importRemovalReason($bill, $items)) throw new DomainException($blocked);
+        if ($bill['status'] !== ($action === 'delete' ? 'draft' : 'confirmed')) throw new DomainException('Chỉ xóa phiếu nháp hoặc hủy phiếu đã xác nhận.');
+        $stmt = $pdo->prepare('SELECT a.* FROM attachments a LEFT JOIN import_bill_details d ON d.id=a.import_bill_detail_id
+            WHERE a.import_bill_id=? OR d.import_bill_id=? ORDER BY a.id FOR UPDATE'); $stmt->execute([$id,$id]); $files = $stmt->fetchAll();
+        $before = $bill + ['items'=>$items,'attachments'=>$files];
+        if ($action === 'delete') {
+            $uploads = dirname(__DIR__) . '/storage/uploads/'; $root = realpath($uploads);
+            foreach ($files as $file) {
+                $folder = $file['import_bill_id'] !== null ? 'imports' : 'import-items';
+                $types = $folder === 'imports' ? ['application/pdf'=>'pdf'] : ['image/jpeg'=>'jpg','image/png'=>'png','image/webp'=>'webp'];
+                $extension = $types[$file['mime_type']] ?? null;
+                if (!$extension || !preg_match('~^'.$folder.'/[a-f0-9]{32}\\.'.$extension.'$~D', $file['storage_path'])) throw new DomainException('Đường dẫn tệp đính kèm không hợp lệ; chưa xóa phiếu.');
+                $path = realpath($uploads . $file['storage_path']);
+                if ($path === false) continue; // A missing upload does not prevent removing its metadata.
+                if ($root === false || !is_file($path) || !str_starts_with(str_replace('\\','/',$path), str_replace('\\','/',$root).'/')) throw new DomainException('Tệp đính kèm nằm ngoài thư mục lưu trữ; chưa xóa phiếu.');
+                $paths[$file['storage_path']] = $path;
+            }
+            $pdo->prepare('DELETE a FROM attachments a LEFT JOIN import_bill_details d ON d.id=a.import_bill_detail_id WHERE a.import_bill_id=? OR d.import_bill_id=?')->execute([$id,$id]);
+            $pdo->prepare('DELETE FROM import_bill_details WHERE import_bill_id=?')->execute([$id]);
+            $pdo->prepare('DELETE FROM import_bill WHERE id=?')->execute([$id]);
+            $stmt = $pdo->prepare('SELECT COUNT(*) FROM attachments WHERE storage_path=?');
+            foreach ($paths as $relative=>$path) { $stmt->execute([$relative]); if ($stmt->fetchColumn()) unset($paths[$relative]); }
+            $after = null;
+        } else {
+            $pdo->prepare("UPDATE import_bill SET status='cancelled',cancel_reason=?,updated_at=GREATEST(CURRENT_TIMESTAMP(6),updated_at + INTERVAL 1 MICROSECOND) WHERE id=?")->execute([$reason,$id]);
+            detachImportDecisions($pdo, $id);
+            $after = array_replace($before, ['status'=>'cancelled','cancel_reason'=>$reason]); unset($after['updated_at']);
+            $stmt = $pdo->prepare('SELECT d.*,EXISTS(SELECT 1 FROM export_bill_details e WHERE e.source_import_detail_id=d.id) AS stock_locked FROM import_bill_details d WHERE d.import_bill_id=? ORDER BY d.id');
+            $stmt->execute([$id]); $after['items'] = $stmt->fetchAll();
+        }
+        $pdo->prepare("INSERT INTO audit_logs (user_id,warehouse_id,action,entity_type,entity_id,before_data,after_data,created_at) VALUES (?,?,?,'import_bill',?,?,?,UTC_TIMESTAMP(6) + INTERVAL 7 HOUR)")
+            ->execute([$actorId,$bill['warehouse_id'],$action,$id,json_encode($before,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR),$after === null ? null : json_encode($after,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR)]);
+        $pdo->commit();
+    } catch (Throwable $error) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        if ($error instanceof PDOException && ($error->errorInfo[1] ?? 0) === 1451) throw new DomainException('Phiếu đang có dữ liệu liên kết; không thể xóa. Hãy tải lại trang để kiểm tra.');
+        throw $error;
+    }
+    $cleanupFailed = false;
+    foreach ($paths as $path) if (is_file($path) && !@unlink($path)) { $cleanupFailed = true; error_log('QLVT receipt upload cleanup failed: '.$path); }
+    return $action === 'cancel' ? 'Đã hủy phiếu '.$bill['number'].', cập nhật tồn kho, gỡ liên kết quyết định và giữ lịch sử cùng tệp đính kèm.'
+        : 'Đã xóa phiếu nháp '.$bill['number'].' và lưu nhật ký.' . ($cleanupFailed ? ' Một số tệp chưa dọn được do quyền thư mục.' : '');
 }
 function loadImports(PDO $pdo): array
 {
     $records = [];
     // ponytail: reuse client-side list filtering; move pagination and detail loading to SQL when receipt volume grows.
-    foreach ($pdo->query("SELECT b.*,w.name AS warehouse_name,s.tax_code AS supplier_tax_code,
+    foreach ($pdo->query("SELECT b.*,w.name AS warehouse_name,w.status AS warehouse_status,s.tax_code AS supplier_tax_code,
         COALESCE(e.full_name,u.username) AS creator_name FROM import_bill b
         JOIN warehouses w ON w.id=b.warehouse_id LEFT JOIN suppliers s ON s.id=b.supplier_id
         LEFT JOIN users u ON u.id=b.created_by LEFT JOIN employees e ON e.id=u.employee_id
@@ -183,10 +326,12 @@ function loadImports(PDO $pdo): array
         $row['id'] = (string) $row['id']; $row['warehouse_id'] = (string) $row['warehouse_id'];
         $records[$row['id']] = $row + ['items' => [], 'attachments' => []];
     }
-    foreach ($pdo->query('SELECT d.*,p.code AS product_code,p.tracking_mode,q.number AS decision_number
+    foreach ($pdo->query('SELECT d.*,p.code AS product_code,p.tracking_mode,q.number AS decision_number,
+        EXISTS(SELECT 1 FROM export_bill_details e WHERE e.source_import_detail_id=d.id) AS stock_locked
         FROM import_bill_details d LEFT JOIN products p ON p.id=d.product_id
         LEFT JOIN decisions q ON q.id=d.decision_id ORDER BY d.id') as $item) {
         if (!isset($records[(string) $item['import_bill_id']])) continue;
+        foreach (['id','product_id','decision_id'] as $field) if ($item[$field] !== null) $item[$field] = (string)$item[$field];
         foreach (['received_quantity', 'unit_price', 'amount_before_tax', 'tax_amount'] as $field) {
             $item[$field . '_display'] = $item[$field] === null ? 'Chưa có' : productQuantity($item[$field]);
         }
@@ -194,9 +339,17 @@ function loadImports(PDO $pdo): array
         $records[(string) $item['import_bill_id']]['items'][] = $item;
     }
     foreach ($pdo->query('SELECT id,import_bill_id,original_name FROM attachments WHERE import_bill_id IS NOT NULL ORDER BY id') as $file) {
+        $file['id'] = (string)$file['id'];
         if (isset($records[(string) $file['import_bill_id']])) $records[(string) $file['import_bill_id']]['attachments'][] = $file;
     }
+    $photos = [];
+    foreach ($pdo->query("SELECT id,import_bill_detail_id,original_name FROM attachments WHERE import_bill_detail_id IS NOT NULL AND mime_type IN ('image/jpeg','image/png','image/webp') ORDER BY id") as $photo) {
+        $photo['id'] = (string)$photo['id']; $photos[(string)$photo['import_bill_detail_id']][] = $photo;
+    }
     foreach ($records as &$row) {
+        $row['version'] = importVersion($row, $row['items']);
+        $row['remove_reason'] = importRemovalReason($row, $row['items']);
+        foreach ($row['items'] as &$item) $item['images'] = $photos[(string)$item['id']] ?? []; unset($item);
         foreach (['total_before_tax', 'total_after_tax'] as $field) $row[$field . '_display'] = $row[$field] === null ? 'Chưa có' : productQuantity($row[$field]) . ' ₫';
     } unset($row);
     return array_values($records);

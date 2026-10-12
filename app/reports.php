@@ -18,13 +18,13 @@ function loadReportData(PDO $pdo, string $userId): array
     try {
         $data=['warehouses'=>[],'products'=>[],'movements'=>[],'receipts'=>[],'accounts'=>[]];
         foreach($pdo->query('SELECT id,name FROM warehouses ORDER BY name,id') as $row) $data['warehouses'][(string)$row['id']]=$row['name'];
-        foreach($pdo->query('SELECT id,code,name,category,unit,tracking_mode,specifications FROM products ORDER BY code,id') as $row) {
-            $row['id']=(string)$row['id']; $row['specifications']??=''; $data['products'][$row['id']]=$row;
+        foreach($pdo->query('SELECT id,code,name,category,unit,tracking_mode FROM products ORDER BY code,id') as $row) {
+            $row['id']=(string)$row['id']; $data['products'][$row['id']]=$row;
         }
         // ponytail: read the confirmed ledger once; use SQL aggregation/on-demand details when receipt history grows.
         foreach(['import'=>['import_bill_details','import_bill','import_bill_id','received_date','received_quantity'],
             'export'=>['export_bill_details','export_bill','export_bill_id','issued_date','issued_quantity']] as $direction=>[$details,$bills,$billId,$date,$quantity]) {
-            foreach($pdo->query("SELECT d.id,d.product_id,d.product_name,d.unit,d.specifications,d.note,d.$quantity AS quantity,d.unit_price,d.amount_before_tax,d.decision_status,
+            foreach($pdo->query("SELECT d.id,d.product_id,d.product_name,d.unit,d.note,d.$quantity AS quantity,d.unit_price,d.amount_before_tax,d.decision_status,
                 q.number AS decision_number,b.id AS bill_id,b.number,b.$date AS date,b.status,b.warehouse_id,b.total_before_tax AS bill_total
                 FROM $bills b LEFT JOIN $details d ON d.$billId=b.id LEFT JOIN decisions q ON q.id=d.decision_id
                 WHERE b.status='confirmed' ORDER BY b.$date,b.id,d.id") as $movement) {
@@ -106,7 +106,7 @@ function buildReport(array $data, array $filters): array
         $row['stock'] = $row['tracking_mode'] === 'none' ? 'untracked' : (in_array(true,$row['unknown'],true)?'unknown':(bccomp($row['closing'], '0', 6) === 0 ? 'empty' : (bccomp($row['closing'], '0', 6) > 0 ? 'stock' : 'negative')));
         if ($row['tracking_mode'] === 'none') foreach (['opening', 'incoming', 'outgoing', 'closing'] as $field) $row[$field] = null;
         elseif($row['stock']==='unknown') { foreach($row['unknown'] as $field=>$unknown) if($unknown) $row[$field]=null; $row['closing']=null; }
-        if (($filters['stock'] !== '' && $row['stock'] !== $filters['stock']) || ($query !== '' && !str_contains(mb_strtolower($row['code'] . ' ' . $row['name'] . ' ' . $row['specifications']), $query))) unset($rows[$key]);
+        if (($filters['stock'] !== '' && $row['stock'] !== $filters['stock']) || ($query !== '' && !str_contains(mb_strtolower($row['code'] . ' ' . $row['name']), $query))) unset($rows[$key]);
     } unset($row);
     usort($rows, static fn($a, $b) => [$a['code'], $a['warehouse_id']] <=> [$b['code'], $b['warehouse_id']]);
     $summary = ['opening_value' => '0', 'incoming_value' => '0', 'outgoing_value' => '0', 'closing_value' => '0'];

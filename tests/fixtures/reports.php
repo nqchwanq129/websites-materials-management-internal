@@ -17,7 +17,7 @@ foreach ($names as $category => $group) for ($i = 0; $i < 12; $i++) {
     $price = (string) (($category === 'fixed_asset' ? 18000000 : ($category === 'consumable' ? 25000 : 850000)) + $i * 5000);
     $products[$id] = ['id' => $id, 'code' => strtoupper(substr($category, 0, 3)) . '-' . str_pad($id, 3, '0', STR_PAD_LEFT),
         'name' => $group[$i % 4] . ' ' . ($i + 1), 'category' => $category, 'unit' => $unit,
-        'tracking_mode' => $untracked ? 'none' : 'quantity', 'specifications' => 'Thiết bị phục vụ thông tin hàng hải; quy cách mẫu ' . ($i + 1)];
+        'tracking_mode' => $untracked ? 'none' : 'quantity'];
     $zero = $i % 5 === 0;
     foreach ([['import', '-2 months', 5, 100, 'confirmed'], ['export', '-1 month', 8, 20, 'confirmed'],
         ['import', '', 5, 40, 'confirmed'], ['export', '', 9, $zero ? 120 : 15, 'confirmed'],

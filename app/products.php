@@ -19,10 +19,10 @@ function productQuantity(?string $value): string
 function loadProducts(PDO $pdo, string $category = ''): array
 {
     $records = [];
-    $statement = $pdo->prepare('SELECT id,code,name,category,unit,specifications,tracking_mode,status,updated_at AS version FROM products WHERE (?=\'\' OR category=?) ORDER BY id DESC');
+    $statement = $pdo->prepare('SELECT id,code,name,category,unit,tracking_mode,status,updated_at AS version FROM products WHERE (?=\'\' OR category=?) ORDER BY id DESC');
     $statement->execute([$category, $category]);
     foreach ($statement as $row) {
-        $row['id'] = (string) $row['id']; $row['specifications'] ??= '';
+        $row['id'] = (string) $row['id'];
         $records[$row['id']] = $row + ['incoming' => '0.000000', 'outgoing' => '0.000000', 'closing' => '0.000000', 'missing_quantity' => false, 'last_received_date' => '', 'stocks' => [], 'movements' => []];
     }
     // ponytail: load receipt history for client filters/details; use SQL pagination and on-demand details when volume grows.
@@ -66,25 +66,24 @@ function saveProduct(PDO $pdo, string $actorId, array $input, string $category =
     $id = managementId($input['id'] ?? null);
     $values = ['code' => managementText($input, 'code', 64, true), 'name' => managementText($input, 'name', 255, true),
         'category' => managementText($input, 'category', 20, true), 'unit' => managementText($input, 'unit', 50, true),
-        'specifications' => managementText($input, 'specifications', 16000), 'tracking_mode' => managementText($input, 'tracking_mode', 10, true), 'status' => managementText($input, 'status', 10, true)];
+        'tracking_mode' => managementText($input, 'tracking_mode', 10, true), 'status' => managementText($input, 'status', 10, true)];
     if (!isset(productCategories()[$values['category']]) || !in_array($values['tracking_mode'], ['quantity', 'none'], true) || !in_array($values['status'], ['active', 'inactive'], true)) throw new DomainException('Nhóm hàng hoặc trạng thái không hợp lệ.');
     $pdo->beginTransaction();
     try {
         $pdo->query('SELECT id FROM users ORDER BY id FOR UPDATE')->fetchAll();
         $actor = findUser($pdo, 'id', $actorId);
         if (!userCanSignIn($actor) || !(int) $actor['is_super_admin']) throw new DomainException('Bạn không có quyền sửa hàng hóa.');
-        $stmt = $pdo->prepare('SELECT id,code,name,category,unit,specifications,tracking_mode,status,updated_at FROM products WHERE id=? FOR UPDATE');
+        $stmt = $pdo->prepare('SELECT id,code,name,category,unit,tracking_mode,status,updated_at FROM products WHERE id=? FOR UPDATE');
         $stmt->execute([$id]); $before = $stmt->fetch();
         if (!$before || managementText($input, 'version', 32, true) !== $before['updated_at']) throw new DomainException('Hàng hóa đã thay đổi. Hãy tải lại trang trước khi sửa.');
         if ($category !== '' && ($before['category'] !== $category || $values['category'] !== $category)) throw new DomainException('Trang này chỉ được sửa hàng hóa thuộc đúng nhóm đang quản lý.');
         $stmt = $pdo->prepare('SELECT (EXISTS(SELECT 1 FROM import_bill_details WHERE product_id=?)) OR (EXISTS(SELECT 1 FROM export_bill_details WHERE product_id=?))');
         $stmt->execute([$id, $id]);
         if ($stmt->fetchColumn() && ($values['unit'] !== $before['unit'] || $values['tracking_mode'] !== $before['tracking_mode'])) throw new DomainException('Hàng hóa đã có phiếu không được đổi đơn vị hoặc cách theo dõi số lượng.');
-        $values['specifications'] = $values['specifications'] ?: null;
         $after = ['id' => $before['id']] + $values;
         unset($before['updated_at']);
         if ($before !== $after) {
-            $pdo->prepare('UPDATE products SET code=?,name=?,category=?,unit=?,specifications=?,tracking_mode=?,status=?,updated_at=GREATEST(CURRENT_TIMESTAMP(6),updated_at + INTERVAL 1 MICROSECOND) WHERE id=?')->execute([...array_values($values), $id]);
+            $pdo->prepare('UPDATE products SET code=?,name=?,category=?,unit=?,tracking_mode=?,status=?,updated_at=GREATEST(CURRENT_TIMESTAMP(6),updated_at + INTERVAL 1 MICROSECOND) WHERE id=?')->execute([...array_values($values), $id]);
             $pdo->prepare("INSERT INTO audit_logs (user_id,action,entity_type,entity_id,before_data,after_data,created_at) VALUES (?,'update','products',?,?,?,UTC_TIMESTAMP(6) + INTERVAL 7 HOUR)")->execute([$actorId, $id, json_encode($before, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR), json_encode($after, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)]);
         }
         $pdo->commit(); return 'Đã lưu thông tin hàng hóa và nhật ký thay đổi.';

@@ -7,6 +7,7 @@ require dirname(__DIR__) . '/app/management.php';
 require dirname(__DIR__) . '/app/dashboard.php';
 require dirname(__DIR__) . '/app/reports.php';
 require dirname(__DIR__) . '/app/profile.php';
+require dirname(__DIR__) . '/vendor/autoload.php';
 function verify(bool $value, string $message): void { if (!$value) throw new RuntimeException($message); }
 function rejected(callable $operation): void {
     try { $operation(); } catch (DomainException $error) { return; }
@@ -33,7 +34,7 @@ function httpManagement(string $page, ?array $fields = null): array {
     preg_match('/\s(\d{3})\s/', $http_response_header[0], $match);
     return [(int) $match[1], $body, $http_response_header];
 }
-function httpDecisionPdf(array $fields, string $pdf, string $name = 'quyet-dinh.pdf', string $page = 'decisions', string $fileField = 'pdf'): array {
+function httpDecisionPdf(array $fields, string $pdf, string $name = 'quyet-dinh.pdf', string $page = 'decisions', string $fileField = 'pdf', array $uploads = []): array {
     global $base, $cookie;
     $boundary = 'qlvt-' . bin2hex(random_bytes(12)); $body = '';
     foreach ($fields as $key => $value) {
@@ -41,7 +42,9 @@ function httpDecisionPdf(array $fields, string $pdf, string $name = 'quyet-dinh.
         $body .= "--$boundary\r\nContent-Disposition: form-data; name=\"$key\"\r\n\r\n$value\r\n";
     }
     $mime = $fileField === 'xml' ? 'application/xml' : 'application/pdf';
-    $body .= "--$boundary\r\nContent-Disposition: form-data; name=\"$fileField\"; filename=\"$name\"\r\nContent-Type: $mime\r\n\r\n$pdf\r\n--$boundary--\r\n";
+    if ($fileField !== '') $uploads[] = ['field'=>$fileField,'name'=>$name,'mime'=>$mime,'data'=>$pdf];
+    foreach ($uploads as $upload) $body .= "--$boundary\r\nContent-Disposition: form-data; name=\"{$upload['field']}\"; filename=\"{$upload['name']}\"\r\nContent-Type: {$upload['mime']}\r\n\r\n{$upload['data']}\r\n";
+    $body .= "--$boundary--\r\n";
     $context = stream_context_create(['http' => ['method' => 'POST', 'header' => "Cookie: $cookie\r\nContent-Type: multipart/form-data; boundary=$boundary\r\n",
         'content' => $body, 'ignore_errors' => true, 'follow_location' => 0, 'timeout' => 10]]);
     $response = file_get_contents($base . 'index.php?page=' . $page, false, $context);
@@ -52,6 +55,15 @@ function tokenFrom(string $body): string {
     preg_match('/name="csrf_token" value="([a-f0-9]{64})"/', $body, $match);
     verify(isset($match[1]), 'Missing CSRF: ' . substr(strip_tags($body), 0, 1500));
     return $match[1];
+}
+function importEditPayload(array $bill, string $csrf): array {
+    $items=[];
+    foreach($bill['items'] as $item) {
+        $line=['id'=>(string)$item['id']];
+        foreach(['product_name','unit','received_quantity','unit_price','amount_before_tax','tax_amount','tax_code','note'] as $field)$line[$field]=(string)($item[$field]??'');
+        $line['decision']=$item['decision_id']===null?$item['decision_status']:(string)$item['decision_id'];$items[]=$line;
+    }
+    return ['csrf_token'=>$csrf,'action'=>'update','id'=>$bill['id'],'version'=>$bill['version'],'items'=>json_encode($items),'form_complete'=>'1'];
 }
 try {
     $source->exec("CREATE DATABASE `$database` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
@@ -77,7 +89,7 @@ try {
     }
     mkdir($testRoot);
     mkdir($testRoot . '/storage');
-    foreach (['app', 'config', 'resources', 'public'] as $directory) {
+    foreach (['app', 'config', 'resources', 'public', 'vendor'] as $directory) {
         $path = dirname(__DIR__) . '/' . $directory;
         $files = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($path, FilesystemIterator::SKIP_DOTS), RecursiveIteratorIterator::SELF_FIRST);
         mkdir($testRoot . '/' . $directory);
@@ -342,9 +354,12 @@ try {
     verify(count(array_filter($importRecords, static fn($row) => $row['status'] === 'draft')) > 0, 'Import list must preserve draft receipts.');
     [$importStatus, $importBody] = httpManagement('imports');
     verify($importStatus === 200 && str_contains($importBody, 'data-import=') && str_contains($importBody, 'id="import-dialog"'), 'Import route must render database receipts.');
-    verify(httpManagement('imports', ['csrf_token' => $csrf, 'action' => 'delete', 'id' => (string) $billId])[0] === 405, 'Import list must not mutate receipts.');
+    verify(httpManagement('imports', ['csrf_token' => $csrf, 'action' => 'delete', 'id' => (string) $billId,'version'=>$importRecord['version']])[0] === 422, 'Confirmed/referenced receipts must not be deleted.');
+    verify(httpManagement('imports', ['csrf_token'=>$csrf,'action'=>'unknown'])[0]===405,'Unknown receipt actions must remain blocked.');
+    $pdo->prepare('UPDATE products SET specifications=?,updated_at=updated_at WHERE id=?')->execute(['Legacy retained', $productId]);
+    verify(!array_key_exists('specifications',$product),'The catalogue must no longer expose specifications.');
     $productInput = ['csrf_token' => $csrf, 'action' => 'save', 'id' => $productId, 'version' => $product['version'], 'code' => $product['code'], 'name' => 'Product <script>',
-        'category' => 'other', 'unit' => 'Piece', 'tracking_mode' => 'quantity', 'status' => 'inactive', 'specifications' => 'Updated specification'];
+        'category' => 'other', 'unit' => 'Piece', 'tracking_mode' => 'quantity', 'status' => 'inactive'];
     verify(httpManagement('products', array_diff_key($productInput, ['csrf_token' => true]))[0] === 403, 'Product CSRF bypass.');
     rejected(fn() => saveManagement($pdo, 'products', $targetId, $productInput));
     $badProduct = $productInput; $badProduct['unit'] = 'Box';
@@ -363,6 +378,8 @@ try {
     verify(httpManagement('materials', $wrongCategory)[0] === 422, 'Category edit must reject products outside its scope.');
     $product = loadProducts($pdo)[0]; $productInput['version'] = $product['version'];
     verify($product['status'] === 'inactive' && $product['closing'] === '12345678901238.123456', 'Metadata edit must not change receipt-derived stock.');
+    $legacy = $pdo->prepare('SELECT specifications FROM products WHERE id=?'); $legacy->execute([$productId]);
+    verify($legacy->fetchColumn()==='Legacy retained','Removing the feature must not erase historical database values.');
     $pdo->exec("INSERT INTO products (code,name,category,unit,tracking_mode) VALUES ('UNTRACKED','Untracked','other','Piece','none')");
     $untrackedId = $pdo->lastInsertId();
     $pdo->prepare("INSERT INTO import_bill_details (import_bill_id,product_id,received_quantity,product_name,unit) VALUES (?,?,NULL,'Untracked','Piece')")->execute([$billId, $untrackedId]);
@@ -384,7 +401,7 @@ try {
         [$pageStatus, $pageBody] = httpManagement($page);
         verify($pageStatus === 200 && str_contains($pageBody, $code) && !str_contains($pageBody, 'data-preview="true"'), 'Category page must render database records without preview mode.');
         $pageInput = ['csrf_token' => $csrf, 'action' => 'save', 'id' => $pageProduct['id'], 'version' => $pageProduct['version'],
-            'code' => $code, 'name' => 'Edited ' . $page, 'category' => $category, 'unit' => 'Piece', 'tracking_mode' => 'quantity', 'status' => 'active', 'specifications' => ''];
+            'code' => $code, 'name' => 'Edited ' . $page, 'category' => $category, 'unit' => 'Piece', 'tracking_mode' => 'quantity', 'status' => 'active'];
         verify(httpManagement($page, $pageInput)[0] === 200, 'Category page must save through its own endpoint.');
         verify(loadManagement($pdo, $page)['products'][0]['name'] === $pageInput['name'], 'Category page edit must persist in database.');
         if (productPages()[$page] !== '') {
@@ -419,6 +436,9 @@ try {
     verify($createdBill['total_before_tax'] === '2.808640' && $createdBill['total_after_tax'] === '3.089504' && $createdBill['items'][0]['decision_status'] === 'pending', 'Server totals or pending decisions incorrect.');
     $createdProduct = array_values(array_filter(loadProducts($pdo), static fn($row) => $row['code'] === 'XML-SKU'))[0];
     verify($createdProduct['closing'] === '1.123456' && $createdProduct['category'] === 'other', 'Confirmed new receipt must appear in stock and category pages.');
+    $removedFields=$pdo->prepare('SELECT p.specifications AS product_spec,d.specifications AS line_spec FROM import_bill_details d JOIN products p ON p.id=d.product_id WHERE p.id=?');
+    $removedFields->execute([$createdProduct['id']]);
+    verify($removedFields->fetch()===['product_spec'=>null,'line_spec'=>null],'New imports must not populate removed specifications.');
     $duplicateCreate = $createInput; $duplicateCreate['number'] = 'CREATED-XML-2';
     verify(httpManagement('import-create', $duplicateCreate)[0] === 422, 'Duplicate supplier invoice must be rejected.');
     $draftItem = ['product_id' => $createdProduct['id'], 'version' => $createdProduct['version'], 'quantity' => '2', 'unit_price' => '1', 'tax_code' => 'KCT', 'name' => 'Tampered name', 'unit' => 'Tampered unit'];
@@ -448,15 +468,131 @@ try {
     verify(httpDecisionPdf($pdfCreate, $pdf, 'invoice.pdf', 'import-create')[0] === 200, 'Receipt PDF upload failed.');
     $pdfBill = array_values(array_filter(loadImports($pdo), static fn($row) => $row['number'] === 'PDF-RECEIPT'))[0];
     verify(count($pdfBill['attachments']) === 1, 'Receipt list must expose linked PDF metadata.');
+    $raster=imagecreatetruecolor(2,2);ob_start();imagepng($raster);$png=ob_get_clean();imagedestroy($raster);
+    $photosCreate=$draftCreate;$photosCreate['number']='PHOTOS-RECEIPT';$photosCreate['invoice_number']='';
+    $photoItem=json_decode($draftCreate['items'],true)[0];$photosCreate['items']=json_encode([$photoItem,$photoItem]);
+    $photosCreate['image_count']='3';$photosCreate['form_complete']='1';
+    $uploads=[];foreach(['images[0][]'=>'first.png','images[1][]'=>'second.png'] as $field=>$name) $uploads[]=['field'=>$field,'name'=>$name,'mime'=>'image/png','data'=>$png];
+    $uploads[]=['field'=>'images[0][]','name'=>'extra.png','mime'=>'image/png','data'=>$png];
+    verify(httpDecisionPdf($photosCreate,$pdf,'invoice.pdf','import-create','pdf',$uploads)[0]===200,'Optional photos and PDF must save together.');
+    $photoBill=array_values(array_filter(loadImports($pdo),static fn($bill)=>$bill['number']==='PHOTOS-RECEIPT'))[0];
+    verify(count($photoBill['items'][0]['images'])===2 && count($photoBill['items'][1]['images'])===1 && count($photoBill['attachments'])===1,'Images must belong to individual receipt lines, including repeated SKUs, separately from PDF.');
+    $edit = importEditPayload($photoBill, $csrf); $edited = json_decode($edit['items'],true);
+    $edited[0] = array_replace($edited[0], ['product_name'=>'Tên sửa <script>','received_quantity'=>'3.123456','unit_price'=>'2.000001','amount_before_tax'=>'6.246915','tax_code'=>'10%','tax_amount'=>'0.624691','note'=>'Đã đối chiếu']);
+    $edit['items']=json_encode($edited);
+    verify(httpManagement('imports',array_diff_key($edit,['csrf_token'=>true]))[0]===403,'Import editing requires CSRF.');
+    rejected(fn()=>updateImport($pdo,$targetId,$edit));
+    foreach(['foreign-line','duplicate','quantity','none-note','draft-decision','unit','incomplete'] as $fault) {
+        $bad=$edit;$lines=$edited;
+        if($fault==='foreign-line')$lines[0]['id']=(string)$pdfBill['items'][0]['id'];
+        if($fault==='duplicate')$lines[1]['id']=$lines[0]['id'];
+        if($fault==='quantity')$lines[0]['received_quantity']='0';
+        if($fault==='none-note'){$lines[0]['decision']='none';$lines[0]['note']='';}
+        if($fault==='draft-decision')$lines[0]['decision']=$newDecisionId;
+        if($fault==='unit')$lines[0]['unit']='Box';
+        if($fault==='incomplete')unset($bad['form_complete']);
+        $bad['items']=json_encode($lines);verify(httpManagement('imports',$bad)[0]===422,'Invalid receipt edit accepted: '.$fault);
+    }
+    verify(httpManagement('imports',$edit)[0]===200,'Receipt line editing failed.');
+    verify(httpManagement('imports',$edit)[0]===422,'Stale receipt edit must fail.');
+    $photoBill=array_values(array_filter(loadImports($pdo),static fn($bill)=>$bill['number']==='PHOTOS-RECEIPT'))[0];
+    verify($photoBill['total_before_tax']==='8.246915' && $photoBill['total_after_tax']==='8.871606' && $photoBill['items'][0]['product_name']==='Tên sửa <script>' && count($photoBill['items'][0]['images'])===2 && count($photoBill['attachments'])===1,'Editing must preserve attachments and update snapshots and exact totals.');
+    verify(loadProducts($pdo)[array_search($createdProduct['id'],array_column(loadProducts($pdo),'id'))]['name']==='XML product','Receipt snapshot editing must not rename the catalogue.');
+    $editCreate=$draftCreate;$editCreate['number']='EDIT-CONFIRMED';$editCreate['status']='confirmed';
+    verify(httpManagement('import-create',$editCreate)[0]===200,'Editable confirmed receipt setup failed.');
+    $editConfirmed=array_values(array_filter(loadImports($pdo),static fn($bill)=>$bill['number']==='EDIT-CONFIRMED'))[0];
+    $confirmedEdit=importEditPayload($editConfirmed,$csrf);$lines=json_decode($confirmedEdit['items'],true);$lines[0]['decision']=$newDecisionId;$confirmedEdit['items']=json_encode($lines);
+    verify(httpManagement('imports',$confirmedEdit)[0]===200,'Confirmed receipt must support linking an existing decision.');
+    $linkedBill=array_values(array_filter(loadImports($pdo),static fn($bill)=>$bill['id']===$editConfirmed['id']))[0];
+    verify((string)$linkedBill['items'][0]['decision_id']===$newDecisionId && $linkedBill['items'][0]['decision_status']==='linked','Receipt decision link was not saved.');
+    $crossDecision=$pdo->prepare('INSERT INTO decisions (warehouse_id,number,issued_date,decision_type,issuing_authority) VALUES (?,?,?,\'increase\',\'Test\')');
+    $crossDecision->execute([$warehouseIds[1],'FOREIGN-DECISION','2026-10-10']);$foreignDecision=$pdo->lastInsertId();
+    $bad=importEditPayload($linkedBill,$csrf);$lines=json_decode($bad['items'],true);$lines[0]['decision']=$foreignDecision;$bad['items']=json_encode($lines);
+    verify(httpManagement('imports',$bad)[0]===422,'Cross-warehouse decision editing must fail.');
+    $photoId=(string)$photoBill['items'][0]['images'][0]['id'];
+    [$photoStatus,$photoData,$photoHeaders]=httpManagement('import-image&id='.$photoId);
+    verify($photoStatus===200 && $photoData===$png && str_contains(implode(' ',$photoHeaders),'Content-Type: image/png') && str_contains(implode(' ',$photoHeaders),'Content-Disposition: inline'),'Photo streaming must return the actual typed image.');
+    verify(httpManagement('import-file&id='.$photoId)[0]===404 && httpManagement('import-image&id='.$photoBill['attachments'][0]['id'])[0]===404,'Photos and PDFs must respect owner/type boundaries.');
+    verify(httpManagement('import-image&id='.$photoId,['csrf_token'=>$csrf])[0]===405,'Photo endpoint must be GET only.');
+    $savedCookie=$cookie;$cookie='';verify(httpManagement('import-image&id='.$photoId)[0]===303,'Guest photo access must fail.');$cookie=$savedCookie;
+    $pdo->prepare('UPDATE users SET is_super_admin=0 WHERE id=?')->execute([$actorId]);
+    verify(httpManagement('import-image&id='.$photoId)[0]===403,'Photo access must follow receipt permissions.');
+    $pdo->prepare('UPDATE users SET is_super_admin=1 WHERE id=?')->execute([$actorId]);
+    $photoCount=(int)$pdo->query('SELECT COUNT(*) FROM attachments')->fetchColumn();
+    foreach (['mime','row','count','complete','size'] as $fault) {
+        $badPhotos=$photosCreate;$badPhotos['number']='BAD-PHOTOS-'.$fault;$badUploads=$uploads;
+        if($fault==='mime')$badUploads[0]['data']='<html>not an image</html>';
+        if($fault==='row')$badUploads[0]['field']='images[99][]';
+        if($fault==='count')$badPhotos['image_count']='4';
+        if($fault==='complete')unset($badPhotos['form_complete']);
+        if($fault==='size')$badUploads[0]['data']=str_repeat('x',5*1024*1024+1);
+        verify(httpDecisionPdf($badPhotos,'','unused','import-create','',$badUploads)[0]===422,'Invalid photo upload accepted: '.$fault);
+    }
+    verify((int)$pdo->query('SELECT COUNT(*) FROM attachments')->fetchColumn()===$photoCount,'Rejected photos must not create attachment metadata.');
     $importPdfId = (string) $pdfBill['attachments'][0]['id'];
     [$downloadStatus, $downloadPdf] = httpManagement('import-file&id=' . $importPdfId);
     verify($downloadStatus === 200 && $downloadPdf === $pdf, 'Receipt PDF must download after authorization.');
+    [$previewStatus,$previewPdf,$previewHeaders]=httpManagement('import-file&id='.$importPdfId.'&preview=1');
+    $previewData=json_decode($previewPdf,true);
+    verify($previewStatus===200 && ($previewData['ok']??false) && base64_decode($previewData['data'],true)===$pdf && $previewData['name']==='invoice.pdf'
+        && str_contains(implode(' ',$previewHeaders),'Content-Type: application/json') && !str_contains(implode(' ',$previewHeaders),'Content-Disposition:'),'Preview must return the linked PDF as JSON without triggering PDF download interception.');
+    verify(httpManagement('import-file&id='.$photoId.'&preview=1')[0]===404,'Inline PDF preview must reject line photos.');
     verify(httpManagement('decision-file&id=' . $importPdfId)[0] === 404, 'Receipt PDF must not be exposed through the decision file endpoint.');
     $savedCookie = $cookie; $cookie = '';
     verify(httpManagement('import-file&id=' . $importPdfId)[0] === 303, 'Guest must not download receipt PDF.'); $cookie = $savedCookie;
+    $savedCookie=$cookie;$cookie='';verify(httpManagement('import-file&id='.$importPdfId.'&preview=1')[0]===303,'Preview JSON must require a signed-in user.');$cookie=$savedCookie;
     $pdo->prepare('UPDATE users SET is_super_admin=0 WHERE id=?')->execute([$actorId]);
     verify(httpManagement('import-file&id=' . $importPdfId)[0] === 403, 'Non-admin must not download receipt PDF.');
+    verify(httpManagement('import-file&id='.$importPdfId.'&preview=1')[0]===403,'Preview JSON must retain receipt permissions.');
     $pdo->prepare('UPDATE users SET is_super_admin=1 WHERE id=?')->execute([$actorId]);
+    $deleteCreate=$photosCreate;$deleteCreate['number']='DELETE-PHOTO-DRAFT';
+    verify(httpDecisionPdf($deleteCreate,$pdf,'draft.pdf','import-create','pdf',$uploads)[0]===200,'Draft deletion setup failed.');
+    $deleteBill=array_values(array_filter(loadImports($pdo),static fn($bill)=>$bill['number']==='DELETE-PHOTO-DRAFT'))[0];
+    $deleteState=['csrf_token'=>$csrf,'action'=>'delete','id'=>$deleteBill['id'],'version'=>$deleteBill['version']];
+    verify(httpManagement('imports',array_diff_key($deleteState,['csrf_token'=>true]))[0]===403,'Receipt deletion requires CSRF.');
+    rejected(fn()=>changeImportState($pdo,$targetId,$deleteState));
+    $bad=$deleteState;$bad['version']=str_repeat('a',64);verify(httpManagement('imports',$bad)[0]===422,'Stale deletion must fail.');
+    $bad=$deleteState;$bad['action']='cancel';$bad['cancel_reason']='Wrong state';verify(httpManagement('imports',$bad)[0]===422,'Drafts must use delete rather than cancellation.');
+    $stmt=$pdo->prepare('SELECT * FROM attachments WHERE import_bill_id=? OR import_bill_detail_id IN (SELECT id FROM import_bill_details WHERE import_bill_id=?)');$stmt->execute([$deleteBill['id'],$deleteBill['id']]);$deleteFiles=$stmt->fetchAll();
+    $badPathFile=$deleteFiles[0];$pdo->prepare('UPDATE attachments SET storage_path=? WHERE id=?')->execute(['../.env',$badPathFile['id']]);
+    verify(httpManagement('imports',$deleteState)[0]===422 && is_file($testRoot.'/.env'),'Draft deletion must reject forged attachment paths without touching files.');
+    $pdo->prepare('UPDATE attachments SET storage_path=? WHERE id=?')->execute([$badPathFile['storage_path'],$badPathFile['id']]);
+    $catalogueCounts=$pdo->query('SELECT (SELECT COUNT(*) FROM products) AS products,(SELECT COUNT(*) FROM suppliers) AS suppliers')->fetch();
+    verify(httpManagement('imports',$deleteState)[0]===200,'Deleting an unreferenced draft failed.');
+    verify(!array_filter(loadImports($pdo),static fn($bill)=>$bill['id']===$deleteBill['id']),'Deleted draft must disappear from the list.');
+    foreach($deleteFiles as $file){verify(!is_file($testRoot.'/storage/uploads/'.$file['storage_path']),'Deleted draft must clean up only its own uploads.');verify(httpManagement(($file['mime_type']==='application/pdf'?'import-file':'import-image').'&id='.$file['id'])[0]===404,'Deleted attachments must no longer be accessible.');}
+    $deletedAudit=$pdo->query("SELECT * FROM audit_logs WHERE action='delete' AND entity_type='import_bill' ORDER BY id DESC LIMIT 1")->fetch();
+    verify(json_decode($deletedAudit['before_data'],true)['number']==='DELETE-PHOTO-DRAFT' && $deletedAudit['after_data']===null,'Deleted drafts must retain their full audit snapshot.');
+    verify($pdo->query('SELECT (SELECT COUNT(*) FROM products) AS products,(SELECT COUNT(*) FROM suppliers) AS suppliers')->fetch()===$catalogueCounts && httpManagement('import-image&id='.$photoId)[0]===200,'Deleting a draft must preserve catalogue records and other receipt uploads.');
+    $cancelCreate=$photosCreate;$cancelCreate['number']='CANCEL-PHOTO-RECEIPT';$cancelCreate['status']='confirmed';
+    verify(httpDecisionPdf($cancelCreate,$pdf,'cancel.pdf','import-create','pdf',$uploads)[0]===200,'Cancellation setup failed.');
+    $cancelBill=array_values(array_filter(loadImports($pdo),static fn($bill)=>$bill['number']==='CANCEL-PHOTO-RECEIPT'))[0];
+    $pdo->prepare("UPDATE import_bill_details SET decision_id=?,decision_status='linked' WHERE id=?")->execute([$newDecisionId,$cancelBill['items'][0]['id']]);
+    $staleCancel=['csrf_token'=>$csrf,'action'=>'cancel','id'=>$cancelBill['id'],'version'=>$cancelBill['version'],'cancel_reason'=>'Sai nội dung hóa đơn'];
+    verify(httpManagement('imports',$staleCancel)[0]===422,'Decision changes must invalidate a pending cancellation form.');
+    $cancelBill=array_values(array_filter(loadImports($pdo),static fn($bill)=>$bill['id']===$cancelBill['id']))[0];
+    $cancelState=$staleCancel;$cancelState['version']=$cancelBill['version'];
+    verify(httpManagement('imports',array_diff_key($cancelState,['csrf_token'=>true]))[0]===403,'Cancellation requires CSRF.');
+    rejected(fn()=>changeImportState($pdo,$targetId,$cancelState));
+    $bad=$cancelState;$bad['cancel_reason']=' ';verify(httpManagement('imports',$bad)[0]===422,'Cancellation requires a non-empty reason.');
+    $bad=$cancelState;$bad['action']='delete';verify(httpManagement('imports',$bad)[0]===422,'Confirmed receipts must not be permanently deleted.');
+    $stockBeforeCancel=array_values(array_filter(loadProducts($pdo),static fn($row)=>$row['id']===$createdProduct['id']))[0]['closing'];
+    $decisionBeforeCancellation=decisionSnapshot($pdo,$newDecisionId);
+    verify(httpManagement('imports',$cancelState)[0]===200,'Cancelling a confirmed, unreferenced receipt failed.');
+    $cancelledBill=array_values(array_filter(loadImports($pdo),static fn($bill)=>$bill['id']===$cancelBill['id']))[0];
+    verify($cancelledBill['status']==='cancelled' && $cancelledBill['cancel_reason']===$cancelState['cancel_reason'] && count($cancelledBill['items'])===count($cancelBill['items']) && $cancelledBill['attachments']===$cancelBill['attachments'],'Cancellation must retain receipt lines and attachment metadata.');
+    foreach($cancelledBill['items'] as $index=>$line){verify($line['decision_id']===null && $line['decision_status']==='pending','Cancelled receipt lines must detach their decisions.');foreach(['product_id','product_name','unit','received_quantity','unit_price','amount_before_tax','tax_amount','note','images'] as $field)verify($line[$field]===$cancelBill['items'][$index][$field],'Unlinking must preserve receipt snapshots and photos: '.$field);}
+    $decisionAfterCancellation=decisionSnapshot($pdo,$newDecisionId);
+    verify(!isset($decisionAfterCancellation['links']['import'][(string)$cancelBill['items'][0]['id']]) && decisionLinksVersion($decisionAfterCancellation['links'])!==decisionLinksVersion($decisionBeforeCancellation['links']),'Cancellation must remove decision links and invalidate a stale decision editor.');
+    $remainingDecisionLinks=$decisionBeforeCancellation['links'];unset($remainingDecisionLinks['import'][(string)$cancelBill['items'][0]['id']]);verify($decisionAfterCancellation['links']===$remainingDecisionLinks,'Other receipt lines attached to the same decision must remain linked.');
+    verify(!array_filter(loadManagement($pdo,'decisions')['decisionLines'],static fn($line)=>$line['direction']==='import' && $line['number']===$cancelBill['number']),'Cancelled lines must disappear from decision details and link choices.');
+    $quantityCancelled=array_reduce($cancelBill['items'],static fn($sum,$line)=>bcadd($sum,$line['received_quantity'],6),'0');
+    verify(array_values(array_filter(loadProducts($pdo),static fn($row)=>$row['id']===$createdProduct['id']))[0]['closing']===bcsub($stockBeforeCancel,$quantityCancelled,6),'Cancelled receipts must no longer contribute to stock.');
+    verify(httpManagement('import-file&id='.$cancelledBill['attachments'][0]['id'])[1]===$pdf && httpManagement('import-image&id='.$cancelledBill['items'][0]['images'][0]['id'])[1]===$png,'Cancellation must retain readable PDF and photos.');
+    $bad=$cancelState;$bad['version']=$cancelledBill['version'];verify(httpManagement('imports',$bad)[0]===422,'Already-cancelled receipts must not be cancelled again.');
+    $bad['action']='delete';verify(httpManagement('imports',$bad)[0]===422,'Cancelled receipts must be retained as history.');
+    $cancelAudit=$pdo->query("SELECT before_data,after_data FROM audit_logs WHERE action='cancel' AND entity_type='import_bill' ORDER BY id DESC LIMIT 1")->fetch();
+    verify(json_decode($cancelAudit['after_data'],true)['cancel_reason']===$cancelState['cancel_reason'] && (string)json_decode($cancelAudit['before_data'],true)['items'][0]['decision_id']===$newDecisionId && json_decode($cancelAudit['after_data'],true)['items'][0]['decision_id']===null,'Cancellation audit must preserve the original decision and the unlink result.');
     try { $pdo->exec('DELETE FROM audit_logs'); throw new RuntimeException('Immutable audit trigger missing.'); }
     catch (PDOException $error) { verify($error->getCode() === '45000', 'Unexpected audit trigger error.'); }
     $lotCreate = $draftCreate; $lotCreate['number'] = 'EXPORT-SOURCE'; $lotCreate['status'] = 'confirmed';
@@ -485,11 +621,13 @@ try {
     $bad['destination_warehouse']=$warehouseIds[0]; verify(httpManagement('export-create',$bad)[0]===422,'Same-warehouse transfer must fail.');
     $bad['destination_warehouse']='999999999'; verify(httpManagement('export-create',$bad)[0]===422,'Missing destination must fail.');
     $confirmed=$exportInput; $confirmed['number']='EXPORT-FIRST'; $confirmed['status']='confirmed';
+    verify(httpManagement('imports',['csrf_token'=>$csrf,'action'=>'cancel','id'=>$lotBill['id'],'version'=>$lotBill['version'],'cancel_reason'=>'Has draft export'])[0]===422,'Even draft export references must block cancellation.');
     verify(httpDecisionPdf($confirmed,'not a PDF','bad.pdf','export-create')[0]===422,'Export PDF validation failed.');
     verify(httpDecisionPdf($confirmed,$pdf,'export.pdf','export-create')[0]===200,'Confirmed export with PDF failed.');
     $first=array_values(array_filter(loadExports($pdo),static fn($row)=>$row['number']==='EXPORT-FIRST'))[0];
     verify($first['receiver_name']==='Người nhận <script>' && $first['total_before_tax']==='3.333333' && $first['items'][0]['decision_status']==='pending','Export snapshot, receiver or precise allocation incorrect.');
     verify($first['items'][0]['product_name']===$lotBill['items'][0]['product_name'] && $first['items'][0]['source_number']==='EXPORT-SOURCE','Export must retain source snapshots.');
+    verify($first['items'][0]['specifications']===null,'New exports must not populate removed specifications.');
     $exportPdfId=(string)$first['attachments'][0]['id'];
     verify(httpManagement('export-file&id='.$exportPdfId)[1]===$pdf,'Export PDF download failed.');
     verify(httpManagement('import-file&id='.$exportPdfId)[0]===404 && httpManagement('export-file&id='.$importPdfId)[0]===404,'PDF owner boundaries failed.');
@@ -503,6 +641,41 @@ try {
     verify(httpManagement('export-create',$final)[0]===200,'Final withdrawal failed.');
     $last=array_values(array_filter(loadExports($pdo),static fn($row)=>$row['number']==='EXPORT-FINAL'))[0];
     verify($last['total_before_tax']==='6.666667' && loadExportSources($pdo,$lotId)[0]['remaining_amount']==='0.000000' && loadExportSources($pdo,$lotId)[0]['remaining_quantity']==='0.000000','Final withdrawal must consume exact remaining value and quantity.');
+    $auditBeforeExcel = (int)$pdo->query('SELECT COUNT(*) FROM audit_logs')->fetchColumn();
+    foreach ([['import',$lotBill,9],['export',$last,10],['export',$first,10]] as [$direction,$receipt,$firstRow]) {
+        [$status,$xlsx,$headers] = httpManagement($direction.'-excel&id='.$receipt['id']);
+        verify($status===200 && str_starts_with($xlsx,"PK\x03\x04") && str_contains(implode(' ',$headers),'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            && str_contains(implode(' ',$headers),'Content-Disposition: attachment; filename="Phieu_'),'Receipt Excel must download a real XLSX with attachment headers.');
+        $xlsxPath = tempnam(sys_get_temp_dir(),'receipt-http-');
+        try {
+            file_put_contents($xlsxPath,$xlsx); $workbook=\PhpOffice\PhpSpreadsheet\IOFactory::load($xlsxPath); $sheet=$workbook->getActiveSheet();
+            verify(str_starts_with($sheet->getCell('B'.$firstRow)->getValue(),$receipt['items'][0]['product_name']),'Excel must use the saved product name rather than the current catalogue.');
+            verify($sheet->getCell('I'.$firstRow)->getValue()===productQuantity($receipt['items'][0]['amount_before_tax'])
+                && $sheet->getCell('I'.($firstRow+count($receipt['items'])))->getValue()===productQuantity($receipt['total_before_tax']),'Excel must preserve exact stored values, including the final lot allocation.');
+            verify((string)$sheet->getCell('C'.($firstRow+count($receipt['items'])+13))->getValue()===(string)($direction==='import'?$receipt['sender_name']:$receipt['receiver_name']),'Excel must use the correct sender/receiver signature.');
+            verify(str_contains($sheet->getCell('C3')->getValue(),$receipt['number']),'Excel must include the selected receipt number.');
+            $workbook->disconnectWorksheets();
+        } finally { unlink($xlsxPath); }
+        verify(httpManagement($direction.'-excel&id='.$receipt['id'],['csrf_token'=>$csrf])[0]===405,'Excel downloads must reject POST requests.');
+        verify(httpManagement($direction.'-excel&id=99999999999999999999')[0]===404,'Missing Excel receipt must return 404.');
+        verify(httpManagement($direction.'-excel&id[]=1')[0]===400,'Array receipt IDs must be rejected.');
+        $savedCookie=$cookie; $cookie=''; verify(httpManagement($direction.'-excel&id='.$receipt['id'])[0]===303,'Guest must not download receipt Excel.'); $cookie=$savedCookie;
+        $pdo->prepare('UPDATE users SET is_super_admin=0 WHERE id=?')->execute([$actorId]);
+        verify(httpManagement($direction.'-excel&id='.$receipt['id'])[0]===403,'Non-admin must not bypass the receipt list permissions through Excel.');
+        $pdo->prepare('UPDATE users SET is_super_admin=1 WHERE id=?')->execute([$actorId]);
+    }
+    verify((int)$pdo->query('SELECT COUNT(*) FROM audit_logs')->fetchColumn()===$auditBeforeExcel && loadExportSources($pdo,$lotId)[0]['remaining_quantity']==='0.000000','Excel downloads must not change stock or add audit writes.');
+    $usedBill=array_values(array_filter(loadImports($pdo),static fn($bill)=>$bill['id']===$lotBill['id']))[0];
+    verify((int)$usedBill['items'][0]['stock_locked']===1,'Used lot must expose its editing lock.');
+    verify($usedBill['remove_reason']!=='' && httpManagement('imports',['csrf_token'=>$csrf,'action'=>'cancel','id'=>$usedBill['id'],'version'=>$usedBill['version'],'cancel_reason'=>'Used lot'])[0]===422,'Confirmed exports must block cancellation on the server and expose the reason in the list.');
+    $usedEdit=importEditPayload($usedBill,$csrf);$usedLines=json_decode($usedEdit['items'],true);$usedLines[0]['received_quantity']='1';$usedEdit['items']=json_encode($usedLines);
+    verify(httpManagement('imports',$usedEdit)[0]===422,'Receipt edit must not reduce or revalue an exported lot.');
+    $usedEdit=importEditPayload($usedBill,$csrf);$usedLines=json_decode($usedEdit['items'],true);$usedLines[0]['note']='Note after export';$usedEdit['items']=json_encode($usedLines);
+    verify(httpManagement('imports',$usedEdit)[0]===200 && loadExportSources($pdo,$lotId)[0]['remaining_quantity']==='0.000000','Used lots must allow notes without altering stock.');
+    foreach (['imports','exports'] as $route) {
+        [, $body]=httpManagement($route);
+        verify(str_contains($body,'id="'.substr($route,0,-1).'-excel"') && str_contains($body,'page='.substr($route,0,-1).'-excel&amp;id='),'Live lists and detail dialogs must expose Excel links.');
+    }
     $lotCreate['number']='TRANSFER-SOURCE'; verify(httpManagement('import-create',$lotCreate)[0]===200,'Transfer source failed.');
     $transferLot=array_values(array_filter(loadImports($pdo),static fn($row)=>$row['number']==='TRANSFER-SOURCE'))[0]['items'][0];
     $transferId=(string)$transferLot['id']; $transferSource=loadExportSources($pdo,$transferId)[0];
@@ -513,6 +686,9 @@ try {
     verify(count($transferBill['transfers'])===1,'Transfer must expose paired incoming receipt.');
     $incoming=array_values(array_filter(loadImports($pdo),static fn($row)=>$row['id']===(string)$transferBill['transfers'][0]['id']))[0];
     verify($incoming['warehouse_id']===$warehouseIds[1] && $incoming['status']==='confirmed' && $incoming['total_before_tax']===$transferBill['total_before_tax'] && (string)$incoming['items'][0]['source_export_detail_id']===(string)$transferBill['items'][0]['id'],'Paired import must preserve transfer lot, warehouse, amount and status.');
+    $bad=importEditPayload($incoming,$csrf);$lines=json_decode($bad['items'],true);$lines[0]['amount_before_tax']='99';$bad['items']=json_encode($lines);
+    verify(httpManagement('imports',$bad)[0]===422,'Paired transfer imports must retain exported valuation.');
+    verify(httpManagement('imports',['csrf_token'=>$csrf,'action'=>'cancel','id'=>$incoming['id'],'version'=>$incoming['version'],'cancel_reason'=>'Transfer'])[0]===422,'Paired transfer receipts must not be cancelled independently.');
     $transfer['number']='DRAFT-TRANSFER'; $transfer['status']='draft'; verify(httpManagement('export-create',$transfer)[0]===200,'Draft transfer failed.');
     $draftTransfer=array_values(array_filter(loadExports($pdo),static fn($row)=>$row['number']==='DRAFT-TRANSFER'))[0];
     verify(!$draftTransfer['transfers'] && loadExportSources($pdo,$transferId)[0]['remaining_quantity']==='2.000000','Draft transfer must not move stock or create incoming receipt.');
@@ -691,6 +867,21 @@ try {
     $importFilesBefore = count(glob($testRoot . '/storage/uploads/imports/*.pdf'));
     verify(httpDecisionPdf($rollbackCreate, $pdf, 'rollback.pdf', 'import-create')[0] === 503, 'PDF receipt must roll back on audit failure.');
     verify(count(glob($testRoot . '/storage/uploads/imports/*.pdf')) === $importFilesBefore, 'Rollback must remove receipt PDF from disk.');
+    $imageFilesBefore=count(glob($testRoot.'/storage/uploads/import-items/*'));
+    $rollbackEdit=importEditPayload($photoBill,$csrf);$lines=json_decode($rollbackEdit['items'],true);$lines[0]['note']='Must roll back';$rollbackEdit['items']=json_encode($lines);
+    verify(httpManagement('imports',$rollbackEdit)[0]===503,'Receipt editing must fail atomically if auditing fails.');
+    $rolledBackBill=array_values(array_filter(loadImports($pdo),static fn($bill)=>$bill['id']===$photoBill['id']))[0];
+    verify($rolledBackBill['version']===$photoBill['version'] && $rolledBackBill['items'][0]['note']==='Đã đối chiếu','Failed receipt edit must roll back lines, totals and version.');
+    $attachmentCount=(int)$pdo->query('SELECT COUNT(*) FROM attachments')->fetchColumn();
+    verify(httpManagement('imports',['csrf_token'=>$csrf,'action'=>'delete','id'=>$photoBill['id'],'version'=>$photoBill['version']])[0]===503,'Draft deletion must roll back if audit insertion fails.');
+    verify((int)$pdo->query('SELECT COUNT(*) FROM attachments')->fetchColumn()===$attachmentCount && count(glob($testRoot.'/storage/uploads/import-items/*'))===$imageFilesBefore && httpManagement('import-image&id='.$photoId)[0]===200,'Failed deletion must retain attachment records, files and receipt lines.');
+    $cancelRollbackBill=array_values(array_filter(loadImports($pdo),static fn($bill)=>$bill['id']===$linkedBill['id']))[0];
+    verify(httpManagement('imports',['csrf_token'=>$csrf,'action'=>'cancel','id'=>$cancelRollbackBill['id'],'version'=>$cancelRollbackBill['version'],'cancel_reason'=>'Must roll back'])[0]===503,'Cancellation must roll back on audit failure.');
+    $cancelRolledBack=array_values(array_filter(loadImports($pdo),static fn($bill)=>$bill['id']===$cancelRollbackBill['id']))[0];
+    verify($cancelRolledBack['version']===$cancelRollbackBill['version'] && $cancelRolledBack['items']===$cancelRollbackBill['items'],'Failed cancellation must preserve status, decisions, line timestamps and version.');
+    $rollbackPhotos=$photosCreate;$rollbackPhotos['number']='ROLLBACK-PHOTOS';
+    verify(httpDecisionPdf($rollbackPhotos,'','unused','import-create','',$uploads)[0]===503,'Photos must fail atomically with an audit failure.');
+    verify(count(glob($testRoot.'/storage/uploads/import-items/*'))===$imageFilesBefore && !(int)$pdo->query("SELECT COUNT(*) FROM import_bill WHERE number='ROLLBACK-PHOTOS'")->fetchColumn(),'Failed photo receipts must remove every newly stored image and roll back the receipt.');
     $productInput['name'] = 'Must roll back';
     verify(httpManagement('products', $productInput)[0] === 503, 'Product write must fail if audit insert fails.');
     $stmt = $pdo->prepare('SELECT name FROM products WHERE id=?'); $stmt->execute([$productId]);
@@ -716,7 +907,7 @@ try {
     verify(managementSnapshot($pdo, 'warehouses', $warehouseIds[0]) === $currentWarehouse, 'Warehouse write must roll back when audit fails.');
     verify(httpManagement('employees', ['csrf_token' => $csrf, 'action' => 'delete', 'id' => $rollbackEmployeeId, 'version' => $rollbackEmployee['updated_at']])[0] === 503, 'Deletion must fail when audit insert fails.');
     verify(managementSnapshot($pdo, 'employees', $rollbackEmployeeId) === $rollbackEmployee, 'Audit failure must restore the deleted employee.');
-    echo "PASS: HTTP management, personal viewer/keeper profiles, password changes/session invalidation, CSRF, permissions, stale writes, stock/transfer/report reconciliation, PDFs and atomic audit rollback.\n";
+    echo "PASS: HTTP management, personal viewer/keeper profiles, password changes/session invalidation, CSRF, permissions, stale writes, stock/transfer/report reconciliation, receipt XLSX downloads, PDFs and atomic audit rollback.\n";
 } finally {
     if (is_resource($server)) { proc_terminate($server); proc_close($server); }
     $source->exec("USE `$original`");

@@ -3,7 +3,7 @@ require_once dirname(__DIR__,2).'/app/exports.php';
 $managementData=['warehouses'=>['1'=>'Kho trung tâm','2'=>'Kho Hải Phòng'],'exports'=>[]];
 for ($i=1;$i<=12;$i++) {
     $items=[]; $type=array_keys(exportTypes())[($i-1)%4];
-    for ($j=1;$j<=($i===1?14:1);$j++) $items[]=['product_name'=>'Thiết bị <script> '.$j,'product_code'=>'HH-'.$j,'specifications'=>'Quy cách kiểm thử','unit'=>'Chiếc',
+    for ($j=1;$j<=($i===1?14:1);$j++) $items[]=['product_name'=>'Thiết bị <script> '.$j,'product_code'=>'HH-'.$j,'unit'=>'Chiếc',
         'issued_quantity_display'=>'1,5','unit_price_display'=>'12.345.678.901.234,123456','amount_before_tax_display'=>'100',
         'source_number'=>'PN-'.$j,'source_date'=>'2026-09-01','decision_status'=>'pending','decision_number'=>null,'note'=>'Ghi chú dòng hàng'];
     $managementData['exports'][]=['id'=>(string)$i,'number'=>'PX-'.str_pad((string)$i,3,'0',STR_PAD_LEFT),'issued_date'=>'2026-10-'.str_pad((string)$i,2,'0',STR_PAD_LEFT),

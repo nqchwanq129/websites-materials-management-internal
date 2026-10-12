@@ -30,7 +30,7 @@ function filterProducts(resetPage = true) {
             && (!productWarehouse.value || product.movements.some(item => String(item.warehouse_id) === productWarehouse.value))
             && (!productStock.value || (product.tracking_mode === 'quantity' && balance.closing == null ? 'unknown' : productStockState(balance.closing)) === productStock.value)
             && (!productStatus.value || product.status === productStatus.value)
-            && normalize([product.code, product.name, product.specifications, ...product.movements.map(item => item.number)].join(' ')).includes(query);
+            && normalize([product.code, product.name, ...product.movements.map(item => item.number)].join(' ')).includes(query);
     });
     const pages = Math.max(1, Math.ceil(matches.length / 10)); productPage = Math.min(productPage, pages);
     const start = (productPage - 1) * 10;
@@ -54,7 +54,7 @@ function appendProductRow(container, values) {
 const productCategories = { consumable: 'Vật tư', spare_part: 'Phụ tùng thay thế', ccdc: 'Công cụ, dụng cụ', fixed_asset: 'Tài sản cố định', other: 'Hàng hóa khác' };
 function openProduct(product) {
     document.getElementById('product-detail-name').textContent = product.name;
-    for (const field of ['code', 'category', 'unit', 'tracking_mode', 'status', 'specifications']) {
+    for (const field of ['code', 'category', 'unit', 'tracking_mode', 'status']) {
         const value = field === 'category' ? productCategories[product.category] : field === 'tracking_mode' ? (product.tracking_mode === 'quantity' ? 'Có' : 'Không')
             : field === 'status' ? (product.status === 'active' ? 'Đang sử dụng' : 'Ngừng sử dụng') : product[field];
         document.getElementById('product-detail-' + field).textContent = value || 'Chưa có thông tin';
@@ -73,7 +73,7 @@ document.querySelectorAll('.product-details').forEach(button => button.addEventL
 const productEditor = document.getElementById('product-editor'), productForm = document.getElementById('product-form');
 function editProduct(product) {
     productForm.reset(); productForm.querySelector('[data-form-error]').hidden = true;
-    for (const field of ['id', 'version', 'code', 'name', 'category', 'unit', 'specifications', 'tracking_mode', 'status']) productForm.elements[field].value = product[field] || '';
+    for (const field of ['id', 'version', 'code', 'name', 'category', 'unit', 'tracking_mode', 'status']) productForm.elements[field].value = product[field] || '';
     productForm.elements.unit.readOnly = product.movements.length !== 0;
     for (const option of productForm.elements.tracking_mode.options) option.disabled = product.movements.length !== 0 && option.value !== product.tracking_mode;
     document.getElementById('product-history-note').textContent = product.movements.length ? 'Hàng hóa đã có phiếu: giữ nguyên đơn vị và cách theo dõi số lượng để bảo toàn lịch sử.' : 'Chưa có phiếu liên quan; có thể điều chỉnh đơn vị và cách theo dõi số lượng.';

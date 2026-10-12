@@ -119,7 +119,7 @@ document.querySelectorAll('[data-management-flash]').forEach(notice => {
     if (!notice.hidden && notice.textContent.trim() && showNotification(notice.textContent.trim())) notice.hidden = true;
 });
 
-async function submitManagementForm(form, dialog, noticeId) {
+async function submitManagementForm(form, dialog, noticeId, payload = new FormData(form)) {
     const error = form.querySelector('[data-form-error]');
     if (form.dataset.preview === 'true') {
         const password = form.querySelector('input[type=password]');
@@ -131,7 +131,6 @@ async function submitManagementForm(form, dialog, noticeId) {
         showNotification(notice.textContent, 'info');
         return;
     }
-    const payload = new FormData(form);
     const endpoint = new URL(form.getAttribute('action'), document.baseURI).href;
     const buttons = [...form.querySelectorAll('button')].filter(button => button.type === 'submit');
     buttons.forEach(button => { button.disabled = true; });

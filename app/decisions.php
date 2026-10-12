@@ -88,7 +88,7 @@ function saveDecision(PDO $pdo, string $actorId, array $input, array $files): st
                 $pdo->prepare("UPDATE $table SET decision_id=?,decision_status='linked',updated_at=GREATEST(CURRENT_TIMESTAMP(6),updated_at + INTERVAL 1 MICROSECOND) WHERE id=?")->execute([$id, $lineId]);
             }
         }
-        $stored = storePdfAttachment($pdo, $pdf, 'decision_id', $id, $actorId);
+        $stored = storeAttachment($pdo, $pdf, 'decision_id', $id, $actorId);
         $after = decisionSnapshot($pdo, $id);
         unset($before['updated_at'], $after['updated_at']);
         if ($before !== $after) $pdo->prepare("INSERT INTO audit_logs (user_id,warehouse_id,action,entity_type,entity_id,before_data,after_data,created_at) VALUES (?,?,?,'decisions',?,?,?,UTC_TIMESTAMP(6) + INTERVAL 7 HOUR)")
@@ -105,5 +105,5 @@ function saveDecision(PDO $pdo, string $actorId, array $input, array $files): st
 
 function downloadDecisionPdf(PDO $pdo, mixed $attachmentId): never
 {
-    downloadPdfAttachment($pdo, $attachmentId, 'decision_id');
+    serveAttachment($pdo, $attachmentId, 'decision_id');
 }

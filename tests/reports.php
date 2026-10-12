@@ -21,7 +21,7 @@ ensureReport(count(buildReport($data, reportFilters(['q' => 'CON-001'], $data))[
 foreach ([['from' => '2026-02-30'], ['from' => '2026-10-31', 'to' => '2026-10-01'], ['kind' => 'invalid'], ['warehouse' => '999'], ['q' => ['bad']], ['stock' => 'invalid']] as $invalid) {
     try { reportFilters($invalid, $data); throw new RuntimeException('Invalid report filter accepted.'); } catch (DomainException $error) {}
 }
-$precise = ['warehouses' => ['1' => 'Warehouse'], 'products' => ['1' => ['id' => '1', 'code' => 'A', 'name' => 'Same name', 'category' => 'consumable', 'unit' => 'Piece', 'tracking_mode' => 'quantity', 'specifications' => '']],
+$precise = ['warehouses' => ['1' => 'Warehouse'], 'products' => ['1' => ['id' => '1', 'code' => 'A', 'name' => 'Same name', 'category' => 'consumable', 'unit' => 'Piece', 'tracking_mode' => 'quantity']],
     'movements' => [['id' => '1', 'product_id' => '1', 'warehouse_id' => '1', 'direction' => 'import', 'date' => '2026-09-01', 'quantity' => '0.000001', 'unit_price' => '1', 'amount_before_tax' => '9007199254740991.123456', 'status' => 'confirmed', 'number' => 'PN-1', 'decision_number' => '']]];
 $preciseReport = buildReport($precise, reportFilters(['from' => '2026-10-01', 'to' => '2026-10-31'], $precise));
 ensureReport($preciseReport['summary']['closing_value'] === '9007199254740991.123456' && $preciseReport['rows'][0]['opening'] === '0.000001' && !$preciseReport['rows'][0]['movements'], 'DECIMAL precision or opening-only detail lost.');

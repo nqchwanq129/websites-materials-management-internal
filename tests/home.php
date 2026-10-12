@@ -35,6 +35,7 @@ if ($preview === 'reports') {
 ob_start();
 require dirname(__DIR__) . '/resources/views/' . ($preview === 'dashboard' ? 'dashboard/home.php' : $preview . '/index.php');
 $html = ob_get_clean();
+if (preg_match('/(?:data-field|name)="specifications"|(?:product|report)-detail-specifications/', $html)) throw new RuntimeException('Removed specifications controls must not render.');
 preg_match_all('/(?:href|src)="(assets\/[^"?]+\.(?:css|js))(\?v=[a-f0-9]{12})?"/', $html, $assets, PREG_SET_ORDER);
 foreach ($assets as $asset) {
     if (($asset[2] ?? '') !== '?v=' . substr(hash_file('sha256', dirname(__DIR__) . '/public/' . $asset[1]), 0, 12)) {

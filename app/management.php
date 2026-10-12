@@ -52,6 +52,7 @@ function managementSnapshot(PDO $pdo, string $page, string $id): ?array
 function saveManagement(PDO $pdo, string $page, string $actorId, array $input, array $files = []): string
 {
     if ($page === 'import-create') return saveImport($pdo, $actorId, $input, $files);
+    if ($page === 'imports') return ($input['action'] ?? '') === 'update' ? updateImport($pdo, $actorId, $input) : changeImportState($pdo, $actorId, $input);
     if ($page === 'export-create') return saveExport($pdo, $actorId, $input, $files);
     if ($page === 'decisions') return saveDecision($pdo, $actorId, $input, $files);
     if (array_key_exists($page, productPages())) return saveProduct($pdo, $actorId, $input, productPages()[$page]);
@@ -233,10 +234,11 @@ function loadManagement(PDO $pdo, string $page): array
     } elseif ($page === 'exports') {
         $data['exports'] = loadExports($pdo);
     } elseif ($page === 'import-create') {
-        $data['products'] = $pdo->query("SELECT id,code,name,category,unit,specifications,tracking_mode,updated_at AS version FROM products WHERE status='active' ORDER BY name,id")->fetchAll();
+        $data['products'] = $pdo->query("SELECT id,code,name,category,unit,tracking_mode,updated_at AS version FROM products WHERE status='active' ORDER BY name,id")->fetchAll();
         $data['suppliers'] = $pdo->query("SELECT id,name,tax_code,address,phone,email FROM suppliers WHERE status='active' ORDER BY name,id")->fetchAll();
     } elseif ($page === 'imports') {
         $data['imports'] = loadImports($pdo);
+        $data['decisions'] = $pdo->query('SELECT id,warehouse_id,number FROM decisions ORDER BY issued_date DESC,id DESC')->fetchAll();
     } elseif (array_key_exists($page, productPages())) {
         $data['products'] = loadProducts($pdo, productPages()[$page]);
     } elseif ($page === 'accounts') {

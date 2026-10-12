@@ -15,7 +15,7 @@ function filterExports(reset = true) {
         return !invalid && (!exportWarehouse.value || bill.warehouse_id === exportWarehouse.value)
             && (!exportType.value || bill.issue_type === exportType.value) && (!exportStatus.value || bill.status === exportStatus.value)
             && (!exportStart.value || bill.issued_date >= exportStart.value) && (!exportEnd.value || bill.issued_date <= exportEnd.value)
-            && normalize([bill.number,bill.receiver_name,bill.reason,bill.destination_warehouse_name,bill.warehouse_name,...bill.items.map(item=>[item.product_name,item.product_code,item.source_number,item.specifications].join(' '))].join(' ')).includes(query);
+            && normalize([bill.number,bill.receiver_name,bill.reason,bill.destination_warehouse_name,bill.warehouse_name,...bill.items.map(item=>[item.product_name,item.product_code,item.source_number].join(' '))].join(' ')).includes(query);
     });
     matches.sort((a,b) => {
         const x=JSON.parse(a.dataset.export), y=JSON.parse(b.dataset.export);
@@ -40,6 +40,8 @@ const exportDialog=document.getElementById('export-dialog');
 const exportTypes=Object.fromEntries([...exportType.options].filter(o=>o.value).map(o=>[o.value,o.textContent]));
 const exportStatuses={draft:'Nháp',confirmed:'Đã xác nhận',cancelled:'Đã hủy'};
 function openExport(bill) {
+    const excel=document.getElementById('export-excel');
+    if(excel.tagName==='A')excel.href='index.php?page=export-excel&id='+encodeURIComponent(bill.id);
     document.getElementById('export-description').textContent=bill.number+' · '+bill.warehouse_name;
     for (const element of exportDialog.querySelectorAll('[id^="export-detail-"]')) {
         const key=element.id.slice('export-detail-'.length);
@@ -52,7 +54,7 @@ function openExport(bill) {
     const rows=document.getElementById('export-item-rows'); rows.replaceChildren();
     for (const item of bill.items) {
         const row=document.createElement('tr');
-        for (const [main,extra] of [[item.product_name,item.specifications], [item.source_number,item.source_date?.split('-').reverse().join('/')], [item.issued_quantity_display,item.unit], [item.unit_price_display,'VND'],
+        for (const [main,extra] of [[item.product_name,''], [item.source_number,item.source_date?.split('-').reverse().join('/')], [item.issued_quantity_display,item.unit], [item.unit_price_display,'VND'],
             [item.amount_before_tax_display,'VND'], [item.decision_number || (item.decision_status==='none' ? 'Không có quyết định' : 'Chờ quyết định'),item.note]]) {
             const cell=document.createElement('td'); cell.textContent=main;
             if (extra) {const sub=document.createElement('small');sub.textContent=extra;cell.append(sub);}
