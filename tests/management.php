@@ -84,6 +84,7 @@ try {
         $source->exec(preg_replace('/,\n\)/', "\n)", implode("\n", $lines)));
     }
     foreach ($foreignKeys as $sql) $source->exec($sql);
+    foreach (explode(';', file_get_contents(dirname(__DIR__) . '/database/2026-10-12-receipt-print-settings.sql')) as $sql) if (trim($sql) !== '') $source->exec($sql);
     foreach ($source->query("SHOW TRIGGERS FROM `$original`")->fetchAll() as $trigger) {
         $source->exec("CREATE TRIGGER `{$trigger['Trigger']}` {$trigger['Timing']} {$trigger['Event']} ON `{$trigger['Table']}` FOR EACH ROW " . $trigger['Statement']);
     }
@@ -834,7 +835,70 @@ try {
     [$status,$body]=httpManagement('profile'); $unlinked=json_decode($body,true,512,JSON_THROW_ON_ERROR)['profile'];
     verify($status===200 && !$unlinked['editable'],'Unlinked admin must display profile without inventing employee data.');
     verify(httpManagement('profile',['csrf_token'=>$csrf,'action'=>'profile','version'=>$unlinked['version'],'full_name'=>'Unlinked','email'=>'','phone'=>''])[0]===422,'Unlinked accounts must not create employee records through self-service.');
+    // Printing settings and snapshots are checked only in this isolated database.
+    $pdo->prepare('INSERT INTO employees (code,full_name,warehouse_id) VALUES (?,?,?)')->execute([$prefix.'-signer','Người ký lúc lập',$warehouseIds[0]]);
+    $printEmployeeId = $pdo->lastInsertId();
+    $printSettings = ['unit_name'=>'Đơn vị riêng','department_name'=>'Bộ phận riêng','department_address'=>'Địa chỉ riêng', 'location'=>'Ngăn A',
+        'keeper_employee_id'=>$printEmployeeId,'accountant_employee_id'=>$printEmployeeId,'director_employee_id'=>$printEmployeeId];
+    $printWarehouseInput = ['csrf_token'=>$csrf,'action'=>'save','code'=>$prefix.'-print','name'=>'Kho in lúc lập','address'=>'Địa chỉ kho', 'status'=>'active','print_settings'=>$printSettings];
+    verify(httpManagement('warehouses',$printWarehouseInput)[0]===200,'Warehouse printing configuration must save through the existing protected form.');
+    $stmt=$pdo->prepare('SELECT id FROM warehouses WHERE code=?');$stmt->execute([$printWarehouseInput['code']]);$printWarehouseId=(string)$stmt->fetchColumn();
+    $printWarehouse=managementSnapshot($pdo,'warehouses',$printWarehouseId);
+    verify($printWarehouse['print_settings']['unit_name']==='Đơn vị riêng','Printing settings must be included in warehouse snapshots.');
+    $printVersion=loadManagement($pdo,'import-create')['printVersions'][$printWarehouseId];
+    $printUpdate=$printWarehouseInput+['id'=>$printWarehouseId,'version'=>$printWarehouse['updated_at']];
+    $badPrint=$printUpdate;$badPrint['print_settings']['keeper_employee_id']='999999999';
+    verify(httpManagement('warehouses',$badPrint)[0]===422 && managementSnapshot($pdo,'warehouses',$printWarehouseId)===$printWarehouse,'Invalid signer must roll back warehouse and configuration together.');
+    verify(httpManagement('warehouses',array_diff_key($printUpdate,['csrf_token'=>true]))[0]===403,'Printing settings must retain CSRF protection.');
+    rejected(fn()=>saveManagement($pdo,'warehouses',$targetId,$printUpdate));
+    $printItem=['product_id'=>'','code'=>'PRINT-GOODS','name'=>'Print goods','unit'=>'Piece','category'=>'other','tracking_mode'=>'quantity','quantity'=>'2','unit_price'=>'10','tax_code'=>'KCT'];
+    $printImport=['csrf_token'=>$csrf,'action'=>'create','warehouse'=>$printWarehouseId,'number'=>'PRINT-IMPORT','received_date'=>'2026-10-12','receipt_type'=>'opening',
+        'status'=>'confirmed','items'=>json_encode([$printItem]),'print_version'=>$printVersion];
+    verify(httpManagement('import-create',$printImport)[0]===200,'Import must save default printing metadata.');
+    $printBill=array_values(array_filter(loadImports($pdo),static fn($row)=>$row['number']==='PRINT-IMPORT'))[0];
+    $printSnapshot=json_decode($printBill['print_snapshot'],true,16,JSON_THROW_ON_ERROR);
+    verify($printSnapshot['unit_name']==='Đơn vị riêng' && $printSnapshot['keeper_name']==='Người ký lúc lập','Import must snapshot configured names and department.');
+    $printSource=loadExportSources($pdo,(string)$printBill['items'][0]['id'])[0];
+    $printExport=['csrf_token'=>$csrf,'action'=>'create','warehouse'=>$printWarehouseId,'number'=>'PRINT-EXPORT','issued_date'=>'2026-10-12','issue_type'=>'transfer',
+        'destination_warehouse'=>$warehouseIds[1],'reason'=>'Print check','status'=>'confirmed','print_version'=>$printVersion,
+        'print_signers'=>['keeper_employee_id'=>''],'items'=>json_encode([['source_import_detail_id'=>$printSource['id'],'version'=>$printSource['version'],'quantity'=>'1']])];
+    $badPrintExport=$printExport;$badPrintExport['print_signers']['keeper_employee_id']='999999999';
+    verify(httpManagement('export-create',$badPrintExport)[0]===422,'Receipt signer overrides must be validated on the server.');
+    verify(httpManagement('export-create',$printExport)[0]===200,'Export must snapshot printing metadata and permit clearing a signer.');
+    $printExportBill=array_values(array_filter(loadExports($pdo),static fn($row)=>$row['number']==='PRINT-EXPORT'))[0];
+    $exportPrint=json_decode($printExportBill['print_snapshot'],true,16,JSON_THROW_ON_ERROR);
+    verify($exportPrint['keeper_name']==='' && $exportPrint['accountant_name']==='Người ký lúc lập','Per-receipt signer overrides must not modify warehouse defaults.');
+    $transferPrintBill=array_values(array_filter(loadImports($pdo),static fn($row)=>$row['id']===(string)$printExportBill['transfers'][0]['id']))[0];
+    $transferPrint=json_decode($transferPrintBill['print_snapshot'],true,16,JSON_THROW_ON_ERROR);
+    verify($transferPrint['warehouse_name']===$pdo->query('SELECT name FROM warehouses WHERE id='.$warehouseIds[1])->fetchColumn() && $transferPrint['unit_name']==='', 'Automatic transfer imports must snapshot the destination warehouse configuration.');
+    $printUpdate['print_settings']['unit_name']='Đơn vị mới';
+    verify(httpManagement('warehouses',$printUpdate)[0]===200 && httpManagement('warehouses',$printUpdate)[0]===422,'A printing-only edit must invalidate stale warehouse forms.');
+    $printImport['number']='STALE-PRINT';
+    verify(httpManagement('import-create',$printImport)[0]===422,'Receipt forms must reject a warehouse configuration changed after the preview.');
+    $pdo->prepare('UPDATE employees SET full_name=? WHERE id=?')->execute(['Tên mới của người ký',$printEmployeeId]);
+    $pdo->prepare('UPDATE warehouses SET name=? WHERE id=?')->execute(['Tên mới của kho',$printWarehouseId]);
+    foreach (['import'=>$printBill,'export'=>$printExportBill] as $direction=>$receipt) {
+        [$printStatus,$printBytes]=httpManagement($direction.'-excel&id='.$receipt['id']);
+        verify($printStatus===200,'Saved receipt export must remain available after configuration/name changes.');
+        $printFile=tempnam(sys_get_temp_dir(),'qlvt-print-check-');
+        try {
+            file_put_contents($printFile,$printBytes);$printBook=\PhpOffice\PhpSpreadsheet\IOFactory::load($printFile);$printSheet=$printBook->getActiveSheet();
+            $signatureRow=($direction==='import'?9:10)+count($receipt['items'])+13;
+            verify(str_contains($printSheet->getCell('A1')->getValue(),'Đơn vị riêng') && str_ends_with($printSheet->getCell('A6')->getValue(),'Kho in lúc lập'),'Old printed metadata must survive changes to the warehouse.');
+            verify($printSheet->getCell('F'.$signatureRow)->getValue()==='Người ký lúc lập','Old signer names must survive employee renames.');
+            $printBook->disconnectWorksheets();
+        } finally { unlink($printFile); }
+    }
+    $printAudit=$pdo->query("SELECT after_data FROM audit_logs WHERE entity_type='import_bill' AND entity_id=".$printBill['id']." AND action='create'")->fetchColumn();
+    verify(json_decode($printAudit,true)['print_snapshot']===$printSnapshot,'Receipt creation audit must contain the saved printing metadata.');
+    $pdo->prepare('UPDATE employees SET status=? WHERE id=?')->execute(['inactive',$printEmployeeId]);
+    $printImport['print_version']=loadManagement($pdo,'import-create')['printVersions'][$printWarehouseId];
+    verify(httpManagement('import-create',$printImport)[0]===422,'New receipts must reject an inactive default signer.');
+    $pdo->prepare('UPDATE employees SET status=? WHERE id=?')->execute(['active',$printEmployeeId]);
     $pdo->exec("CREATE TRIGGER test_audit_failure BEFORE INSERT ON audit_logs FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Test audit failure'");
+    $printWarehouse=managementSnapshot($pdo,'warehouses',$printWarehouseId);
+    $printUpdate['version']=$printWarehouse['updated_at'];$printUpdate['print_settings']['unit_name']='Must roll back';
+    verify(httpManagement('warehouses',$printUpdate)[0]===503 && managementSnapshot($pdo,'warehouses',$printWarehouseId)===$printWarehouse,'Warehouse printing settings must roll back when audit insertion fails.');
     $beforePersonal=managementSnapshot($pdo,'employees',$employeeId);
     $ownProfile=loadOwnProfile($pdo,$targetId);
     try {

@@ -472,6 +472,8 @@ try {
     await evaluate('document.querySelector(".edit-warehouse").click()');
     assert.equal(await evaluate('warehouseForm.elements.namedItem("name").value'), 'Kho 1');
     assert.equal(await evaluate('warehouseForm.elements.id.value'), '1');
+    assert.equal(await evaluate('warehouseForm.querySelector("[data-print-setting=unit_name]").value'), 'Đơn vị thử');
+    assert.equal(await evaluate('warehouseForm.querySelector("[data-print-setting=keeper_employee_id]").value'), '1');
     assert.deepEqual(await evaluate(`(async () => {
         const originalFetch = window.fetch;
         const originalPreview = warehouseForm.dataset.preview;
@@ -1017,6 +1019,10 @@ try {
     assert.equal(await evaluate('importLines.querySelectorAll(".import-image-preview").length'),1,'A photo can be removed without deleting its receipt row.');
     await evaluate(`(async()=>{const first=importLines.firstElementChild,second=addImportLine(),files=new DataTransfer(),bytes=Uint8Array.from(atob(${JSON.stringify(photoPng)}),char=>char.charCodeAt(0));files.items.add(new File([bytes],'second-row.png',{type:'image/png'}));const picker=second.querySelector('[data-import-images]');picker.files=files.files;picker.dispatchEvent(new Event('change',{bubbles:true}));await Promise.all([...second.querySelectorAll('.import-image-previews img')].map(image=>image.decode()));first.querySelector('.remove-import-line').click();let payload;const original=submitManagementForm;submitManagementForm=(form,dialog,notice,data)=>{payload=data;};try{importCreateForm.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));if(payload.getAll('images[0][]').length!==1 || payload.has('images[1][]') || payload.get('image_count')!=='1' || payload.get('form_complete')!=='1')throw new Error('Removed rows must reindex photo uploads to the final receipt line order.');}finally{submitManagementForm=original;clearImportPhotos(second);second.remove();addImportLine();}})()`);
     assert.equal(await evaluate('importCreateForm.elements.warehouse.options.length'),2,'Inactive warehouse must be excluded.');
+    await evaluate('importCreateForm.elements.warehouse.value="1";importCreateForm.elements.warehouse.dispatchEvent(new Event("change"))');
+    assert.equal(await evaluate('document.querySelector("[data-print-value=department_address]").value'), 'Địa chỉ bộ phận thử');
+    assert.equal(await evaluate('document.querySelector("[data-print-signer=keeper_employee_id]").value'), '1');
+    assert.equal(await evaluate('importCreateForm.elements.print_version.value'), 'b'.repeat(64));
     await evaluate(`for(const [key,value] of Object.entries({name:'New product',unit:'Piece',quantity:'1.123456',unit_price:'2.5',tax_code:'10%'}))importLines.firstElementChild.querySelector('[data-field='+key+']').value=value; updateImportTotals()`);
     assert.equal(await evaluate('document.getElementById("import-total-after").textContent'),'3,089504 ₫','Preview totals must use exact decimals.');
     await evaluate('const selectedImportLine=importLines.firstElementChild;selectedImportLine.querySelector("[data-field=product_id]").value="1";configureImportLine(selectedImportLine,true)');
@@ -1128,6 +1134,12 @@ try {
             assert.equal(await evaluate('exportDialog.querySelectorAll("script").length'),0);
         } else {
             assert.equal(await evaluate('[...exportCreateForm.elements.warehouse.options].some(o=>o.value==="3")'),false);
+            await evaluate('exportCreateForm.elements.warehouse.value="1";exportCreateForm.elements.warehouse.dispatchEvent(new Event("change"))');
+            assert.equal(await evaluate('document.querySelector("[data-print-value=unit_name]").value'), 'Đơn vị thử');
+            assert.equal(await evaluate('document.querySelector("[data-print-signer=keeper_employee_id]").value'), '1');
+            await evaluate('document.querySelector("[data-print-signer=keeper_employee_id]").value="";exportCreateForm.elements.warehouse.value="2";exportCreateForm.elements.warehouse.dispatchEvent(new Event("change"))');
+            assert.equal(await evaluate('document.querySelector("[data-print-value=department_address]").value'), 'Địa chỉ kho 2');
+            assert.equal(await evaluate('document.querySelector("[data-print-signer=keeper_employee_id]").value'), '');
             await evaluate('exportCreateForm.elements.warehouse.value="1";exportCreateForm.elements.issued_date.value="2026-10-10";updateExportOptions()');
             assert.equal(await evaluate('exportLines.firstElementChild.querySelector("select").options.length'),2,'Only dated lots at the selected warehouse can be selected.');
             await evaluate('exportLines.firstElementChild.querySelector("select").value="1";showExportSource(exportLines.firstElementChild);exportLines.firstElementChild.querySelector("[data-field=quantity]").value="1";updateExportTotals()');

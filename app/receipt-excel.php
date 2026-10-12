@@ -45,6 +45,11 @@ function buildReceiptWorkbook(string $direction, array $bill): Spreadsheet
     $incoming = $direction === 'import';
     $book = IOFactory::load(dirname(__DIR__) . '/resources/templates/receipts/mau_phieu_' . ($incoming ? 'nhap' : 'xuat') . '_kho.xlsx');
     $sheet = $book->getActiveSheet();
+    if (!$incoming) foreach (['A4:E4','F4:I4','A6:E6','F6:I6'] as $range) $sheet->mergeCells($range);
+    $print = is_string($bill['print_snapshot'] ?? null) ? json_decode($bill['print_snapshot'], true, 16, JSON_THROW_ON_ERROR) : ($bill['print_snapshot'] ?? []);
+    $sheet->setCellValueExplicit('A1', "Đơn vị:\n" . ($print['unit_name'] ?? '') . "\nBộ phận:\n" . ($print['department_name'] ?? ''), DataType::TYPE_STRING);
+    $sheet->setCellValueExplicit('F4', 'Địa chỉ bộ phận: ' . ($print['department_address'] ?? ''), DataType::TYPE_STRING);
+    $sheet->setCellValueExplicit('F6', 'Địa điểm: ' . ($print['location'] ?? ''), DataType::TYPE_STRING);
     $firstRow = $incoming ? 9 : 10;
     // Keep the original single blank row when a historical receipt has no details.
     $rowCount = max(1, count($bill['items']));
@@ -66,7 +71,7 @@ function buildReceiptWorkbook(string $direction, array $bill): Spreadsheet
     $sheet->setCellValueExplicit('A5', $incoming
         ? '-  Theo: ' . (!empty($bill['invoice_number']) ? 'Hoá đơn số ' . $bill['invoice_number'] : 'Phiếu số ' . $bill['number'])
         : '-  Lý do xuất kho: ' . ($bill['reason'] ?? ''), DataType::TYPE_STRING);
-    $sheet->setCellValueExplicit('A6', '-  ' . ($incoming ? 'Nhập' : 'Xuất') . ' tại kho (ngăn lô): ' . $bill['warehouse_name'], DataType::TYPE_STRING);
+    $sheet->setCellValueExplicit('A6', '-  ' . ($incoming ? 'Nhập' : 'Xuất') . ' tại kho (ngăn lô): ' . ($print['warehouse_name'] ?? $bill['warehouse_name']), DataType::TYPE_STRING);
     $total = '0.000000';
     foreach ($bill['items'] as $index => $item) {
         $row = $firstRow + $index;
@@ -100,7 +105,9 @@ function buildReceiptWorkbook(string $direction, array $bill): Spreadsheet
     $sheet->setCellValueExplicit('A' . ($totalRow + 3), '- Số chứng từ gốc kèm theo: ' . $documents, DataType::TYPE_STRING);
     $sheet->setCellValueExplicit('G' . ($totalRow + 5), $dateLabel, DataType::TYPE_STRING);
     $sheet->setCellValueExplicit('C' . ($totalRow + 13), $person, DataType::TYPE_STRING);
-    $sheet->setCellValueExplicit('A' . ($totalRow + 13), $bill['creator_name'] ?? '', DataType::TYPE_STRING);
+    $sheet->setCellValueExplicit('A' . ($totalRow + 13), $print['creator_name'] ?? ($bill['creator_name'] ?? ''), DataType::TYPE_STRING);
+    foreach (['D'=>'keeper','F'=>'accountant','H'=>'director'] as $column=>$role) $sheet->setCellValueExplicit($column . ($totalRow + 13), $print[$role.'_name'] ?? '', DataType::TYPE_STRING);
+    foreach (['A1','A4','F4','A6','F6'] as $cell) $sheet->getStyle($cell)->getAlignment()->setShrinkToFit(true);
     return $book;
 }
 
@@ -116,6 +123,8 @@ function downloadReceiptExcel(PDO $pdo, string $direction, mixed $value): never
         $statement->execute([$id]);
         $bill = $statement->fetch();
         if ($bill) {
+            // Legacy receipts have no saved printing metadata; use the current warehouse configuration.
+            if ($bill['print_snapshot'] === null) $bill['print_snapshot'] = receiptPrintSnapshot($pdo, (string)$bill['warehouse_id'], (string)($bill['created_by'] ?? '0'), [], false);
             $statement = $pdo->prepare($direction === 'import'
                 ? 'SELECT d.*,p.code AS product_code FROM import_bill_details d LEFT JOIN products p ON p.id=d.product_id WHERE d.import_bill_id=? ORDER BY d.id'
                 : 'SELECT d.*,p.code AS product_code,b.number AS source_number,b.invoice_number AS source_invoice_number

@@ -44,7 +44,7 @@ document.getElementById('audit-reset').addEventListener('click', () => {
 });
 filterAudit();
 const auditDialog = document.getElementById('audit-dialog');
-const auditFields = { id: 'ID', address: 'Địa chỉ', employee_id: 'Nhân viên liên kết', warehouse_id: 'Kho làm việc', warehouses: 'Quyền theo kho', password_changed: 'Đã đổi mật khẩu', username: 'Tên đăng nhập', full_name: 'Họ và tên', email: 'Email', phone: 'Số điện thoại', status: 'Trạng thái', name: 'Tên', code: 'Mã', unit: 'Đơn vị', number: 'Số phiếu / quyết định', reason: 'Lý do', cancel_reason: 'Lý do hủy', total_before_tax: 'Giá trị trước thuế', is_super_admin: 'Quản trị viên toàn hệ thống', decision_type: 'Loại quyết định', issued_date: 'Ngày ban hành' };
+const auditFields = { print_settings: 'Cấu hình in phiếu', print_snapshot: 'Thông tin in lúc lập phiếu', id: 'ID', address: 'Địa chỉ', employee_id: 'Nhân viên liên kết', warehouse_id: 'Kho làm việc', warehouses: 'Quyền theo kho', password_changed: 'Đã đổi mật khẩu', username: 'Tên đăng nhập', full_name: 'Họ và tên', email: 'Email', phone: 'Số điện thoại', status: 'Trạng thái', name: 'Tên', code: 'Mã', unit: 'Đơn vị', number: 'Số phiếu / quyết định', reason: 'Lý do', cancel_reason: 'Lý do hủy', total_before_tax: 'Giá trị trước thuế', is_super_admin: 'Quản trị viên toàn hệ thống', decision_type: 'Loại quyết định', issued_date: 'Ngày ban hành' };
 function auditValue(data, key) {
     if (!data || !Object.hasOwn(data, key)) return 'Chưa có dữ liệu';
     const value = data[key];

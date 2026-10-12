@@ -22,7 +22,10 @@ try {
                 'source_number'=>'PN-001', 'source_invoice_number'=>'0000123']);
             $bill = ['number'=>'PX/PN-001','received_date'=>'2026-10-12','issued_date'=>'2026-10-11', 'sender_name'=>'Người giao',
                 'receiver_name'=>'Người nhận', 'reason'=>'Cấp phát', 'warehouse_name'=>'Kho thử', 'invoice_number'=>'0000123',
-                'creator_name'=>'Người lập', 'status'=>'draft', 'items'=>$items, 'total_before_tax'=>bcmul('6.666667',(string)$count,6)];
+                'creator_name'=>'Tên mới của người lập', 'status'=>'draft', 'items'=>$items, 'total_before_tax'=>bcmul('6.666667',(string)$count,6),
+                'print_snapshot'=>json_encode(['unit_name'=>'Đơn vị thử','department_name'=>'Bộ phận thử','department_address'=>'Địa chỉ thử',
+                    'location'=>'Ngăn A','warehouse_name'=>'Tên kho lúc lập','creator_name'=>'Người lập','keeper_name'=>'Thủ kho thử',
+                    'accountant_name'=>'=SUM(1,2)','director_name'=>'Giám đốc thử'],JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR)];
             $book = buildReceiptWorkbook($direction, $bill);
             (new \PhpOffice\PhpSpreadsheet\Writer\Xlsx($book))->save($temporary);
             $book->disconnectWorksheets();
@@ -33,11 +36,13 @@ try {
             checkReceipt($sheet->getCell('B'.$total)->getValue() === 'Cộng', 'Original total row must move below all items.');
             checkReceipt($sheet->getCell('C'.($total+13))->getValue() === ($direction==='import'?'Người giao':'Người nhận'), 'Person signature row must move with template.');
             checkReceipt($sheet->getCell('A'.($total+13))->getValue() === 'Người lập', 'Creator signature must use the actual creator.');
-            checkReceipt($sheet->getCell('D'.($total+13))->getValue() === $original->getCell('D'.($first+14))->getValue(), 'Other signature names must retain the template.');
+            checkReceipt($sheet->getCell('A1')->getValue() === "Đơn vị:\nĐơn vị thử\nBộ phận:\nBộ phận thử" && $sheet->getCell('F4')->getValue() === 'Địa chỉ bộ phận: Địa chỉ thử', 'Department metadata must replace the fixed template text.');
+            checkReceipt($sheet->getCell('F6')->getValue() === 'Địa điểm: Ngăn A' && str_ends_with($sheet->getCell('A6')->getValue(),'Tên kho lúc lập'), 'Warehouse location/name must use the saved snapshot.');
+            foreach (['D'=>'Thủ kho thử','F'=>'=SUM(1,2)','H'=>'Giám đốc thử'] as $column=>$name) checkReceipt($sheet->getCell($column.($total+13))->getValue() === $name && $sheet->getCell($column.($total+13))->getDataType() === 's', 'Signer names must be saved safe text and move with the table.');
             checkReceipt(str_contains($sheet->getCell('C3')->getValue(),'BẢN NHÁP'), 'Draft receipts must be labelled.');
             checkReceipt(str_contains($sheet->getCell('A'.($total+3))->getValue(),$direction==='import'||$count?'0000123':$bill['number']), 'Source invoice numbers must retain leading zeros; empty exports must fall back to their receipt number.');
             checkReceipt(str_contains($sheet->getCell('C1')->getValue(),$direction==='import'?'12 tháng 10':'11 tháng 10'), 'Receipt date must be used, not download date.');
-            foreach (['A1','E1','B7','J7','K7'] as $cell) {
+            foreach (['E1','B7','J7','K7'] as $cell) {
                 checkReceipt($sheet->getCell($cell)->getValue() === $original->getCell($cell)->getValue(), 'Template heading was changed: '.$cell);
                 checkReceipt($sheet->getStyle($cell)->getFont()->getName() === $original->getStyle($cell)->getFont()->getName(), 'Template font was changed.');
                 checkReceipt($sheet->getStyle($cell)->getBorders()->exportArray() === $original->getStyle($cell)->getBorders()->exportArray(), 'Template borders were changed.');
@@ -70,6 +75,10 @@ try {
     $book = buildReceiptWorkbook('export',$bill);
     $documents = $book->getActiveSheet()->getCell('A'.(10+count($bill['items'])+3))->getValue();
     checkReceipt(str_contains($documents,'Hoá đơn số 0000123') && str_contains($documents,'Phiếu số PN-OPENING'), 'Mixed source invoices and receipts must all remain listed.');
+    $book->disconnectWorksheets();
+    $bill['print_snapshot'] = null;
+    $book = buildReceiptWorkbook('export', $bill);
+    checkReceipt($book->getActiveSheet()->getCell('D'.(10+count($bill['items'])+13))->getValue() === '' && $book->getActiveSheet()->getCell('F4')->getValue() === 'Địa chỉ bộ phận: ', 'Unconfigured receipts must never retain sample names or addresses.');
     $book->disconnectWorksheets();
     $bill['issued_date']='2026-02-30';
     try { buildReceiptWorkbook('export',$bill); throw new RuntimeException('Invalid stored dates must not silently change on Excel.'); }

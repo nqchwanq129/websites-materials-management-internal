@@ -73,8 +73,9 @@ function saveExport(PDO $pdo, string $actorId, array $input, array $files = []):
                 'note' => managementText($item, 'note', 16000) ?: null];
             unset($source);
         }
-        $pdo->prepare('INSERT INTO export_bill (warehouse_id,number,issued_date,issue_type,reason,receiver_name,total_before_tax,status,destination_warehouse_id,created_by) VALUES (?,?,?,?,?,?,?,?,?,?)')
-            ->execute([$warehouse, $number, $date, $type, $reason, $receiver ?: null, $total, $status, $destination, $actorId]);
+        $printSnapshot = receiptPrintSnapshot($pdo, $warehouse, $actorId, $input);
+        $pdo->prepare('INSERT INTO export_bill (warehouse_id,number,issued_date,issue_type,reason,receiver_name,total_before_tax,status,destination_warehouse_id,created_by,print_snapshot) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+            ->execute([$warehouse, $number, $date, $type, $reason, $receiver ?: null, $total, $status, $destination, $actorId, json_encode($printSnapshot,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR)]);
         $id = $pdo->lastInsertId();
         $stmt = $pdo->prepare("INSERT INTO export_bill_details (export_bill_id,product_id,source_import_detail_id,issued_quantity,unit_price,amount_before_tax,product_name,unit,note,decision_status,created_by) VALUES (?,?,?,?,?,?,?,?,?,'pending',?)");
         foreach ($lines as &$line) { $stmt->execute([$id, ...array_values($line), $actorId]); $line['id'] = $pdo->lastInsertId(); } unset($line);
@@ -85,16 +86,17 @@ function saveExport(PDO $pdo, string $actorId, array $input, array $files = []):
         $transferId = null;
         if ($type === 'transfer' && $status === 'confirmed') {
             $transferNumber = 'DC-PX-' . $id;
-            $pdo->prepare("INSERT INTO import_bill (warehouse_id,number,received_date,receipt_type,sender_name,total_before_tax,total_after_tax,status,created_by) VALUES (?,?,?,'transfer',?,?,?,'confirmed',?)")
-                ->execute([$destination, $transferNumber, $date, $actor['full_name'] ?? $actor['username'], $total, $total, $actorId]);
+            $transferPrint = receiptPrintSnapshot($pdo, $destination, $actorId);
+            $pdo->prepare("INSERT INTO import_bill (warehouse_id,number,received_date,receipt_type,sender_name,total_before_tax,total_after_tax,status,created_by,print_snapshot) VALUES (?,?,?,'transfer',?,?,?,'confirmed',?,?)")
+                ->execute([$destination, $transferNumber, $date, $actor['full_name'] ?? $actor['username'], $total, $total, $actorId, json_encode($transferPrint,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR)]);
             $transferId = $pdo->lastInsertId();
             $stmt = $pdo->prepare("INSERT INTO import_bill_details (import_bill_id,product_id,received_quantity,unit_price,amount_before_tax,product_name,unit,note,source_export_detail_id,decision_status,created_by) VALUES (?,?,?,?,?,?,?,?,?,'pending',?)");
             foreach ($lines as $line) $stmt->execute([$transferId, $line['product_id'], $line['issued_quantity'], $line['unit_price'], $line['amount_before_tax'], $line['product_name'], $line['unit'], $line['note'], $line['id'], $actorId]);
-            $audit('import_bill', $transferId, $destination, ['number' => $transferNumber, 'source_export_bill_id' => $id, 'status' => 'confirmed', 'total_before_tax' => $total, 'items' => $lines]);
+            $audit('import_bill', $transferId, $destination, ['number' => $transferNumber, 'source_export_bill_id' => $id, 'status' => 'confirmed', 'total_before_tax' => $total, 'items' => $lines, 'print_snapshot'=>$transferPrint]);
         }
         $stored = storeAttachment($pdo, $pdf, 'export_bill_id', $id, $actorId);
         $audit('export_bill', $id, $warehouse, ['number' => $number, 'issued_date' => $date, 'issue_type' => $type, 'reason' => $reason, 'receiver_name' => $receiver,
-            'status' => $status, 'destination_warehouse_id' => $destination, 'destination_import_bill_id' => $transferId, 'total_before_tax' => $total, 'items' => $lines, 'pdf' => $pdf['name'] ?? null]);
+            'status' => $status, 'destination_warehouse_id' => $destination, 'destination_import_bill_id' => $transferId, 'total_before_tax' => $total, 'items' => $lines, 'print_snapshot'=>$printSnapshot, 'pdf' => $pdf['name'] ?? null]);
         $pdo->commit();
         return 'Đã lưu phiếu xuất ' . $number . ($status === 'draft' ? ' ở trạng thái nháp.' : ($transferId ? ' và phiếu nhập điều chuyển ở kho nhận.' : ' và cập nhật tồn kho.'));
     } catch (Throwable $error) {

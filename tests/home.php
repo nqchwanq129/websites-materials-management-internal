@@ -32,6 +32,14 @@ if ($preview === 'reports') {
     $previewOnly = !in_array('--live-report', $argv, true);
     $sampleRows['reports'][1] = $kind === 'inventory' ? 60 : 12;
 } else require __DIR__ . '/fixtures/' . (isset($productPages[$preview]) ? 'products' : $preview) . '.php';
+if (in_array($preview, ['warehouses','import-create','export-create'], true)) {
+    $managementData['printEmployees'] = [['id'=>'1','code'=>'NV01','full_name'=>'Người ký <script>','status'=>'active']];
+    $managementData['printSettings'] = ['1'=>['unit_name'=>'Đơn vị thử','department_name'=>'Bộ phận thử','department_address'=>'Địa chỉ bộ phận thử',
+        'location'=>'Ngăn A','keeper_employee_id'=>'1','accountant_employee_id'=>null,'director_employee_id'=>null]];
+    $managementData['printVersions'] = ['1'=>str_repeat('b',64),'2'=>str_repeat('c',64)];
+    $managementData['printWarehouses'] = ['1'=>['name'=>'Kho 1','address'=>'Địa chỉ kho 1'],'2'=>['name'=>'Kho 2','address'=>'Địa chỉ kho 2']];
+    if ($preview==='warehouses') $managementData['warehouseRecords'][0]['print_settings'] = $managementData['printSettings']['1'];
+}
 ob_start();
 require dirname(__DIR__) . '/resources/views/' . ($preview === 'dashboard' ? 'dashboard/home.php' : $preview . '/index.php');
 $html = ob_get_clean();

@@ -156,8 +156,9 @@ function saveImport(PDO $pdo, string $actorId, array $input, array $files = []):
             $expected = managementText($input, $field, 32);
             if ($expected !== '' && bccomp(importDecimal($expected), $total, 6) !== 0) throw new DomainException('Tổng các dòng hàng chưa khớp tổng hóa đơn XML. Kiểm tra thành tiền và tiền thuế trước khi lưu.');
         }
-        $header = [$warehouse, $number, $date, $type, $supplierId, $supplierName ?: null, $invoice ?: null, $series ?: null, $invoiceDate, $sender ?: null, $beforeTax, $afterTax, $status, $actorId];
-        $pdo->prepare('INSERT INTO import_bill (warehouse_id,number,received_date,receipt_type,supplier_id,supplier_name,invoice_number,invoice_series,invoice_date,sender_name,total_before_tax,total_after_tax,status,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute($header);
+        $printSnapshot = receiptPrintSnapshot($pdo, $warehouse, $actorId, $input);
+        $header = [$warehouse, $number, $date, $type, $supplierId, $supplierName ?: null, $invoice ?: null, $series ?: null, $invoiceDate, $sender ?: null, $beforeTax, $afterTax, $status, $actorId, json_encode($printSnapshot,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR)];
+        $pdo->prepare('INSERT INTO import_bill (warehouse_id,number,received_date,receipt_type,supplier_id,supplier_name,invoice_number,invoice_series,invoice_date,sender_name,total_before_tax,total_after_tax,status,created_by,print_snapshot) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute($header);
         $billId = $pdo->lastInsertId();
         $stmt = $pdo->prepare("INSERT INTO import_bill_details (import_bill_id,product_id,received_quantity,unit_price,amount_before_tax,tax_code,tax_amount,product_name,unit,note,decision_status,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,'pending',?)");
         foreach ($lines as $index => $line) {
@@ -166,7 +167,7 @@ function saveImport(PDO $pdo, string $actorId, array $input, array $files = []):
             foreach ($images[$index] ?? [] as $image) $storedImages[] = storeAttachment($pdo, $image, 'import_bill_detail_id', $detailId, $actorId);
         }
         $stored = storeAttachment($pdo, $pdf, 'import_bill_id', $billId, $actorId);
-        $audit('import_bill', $billId, ['number' => $number, 'warehouse_id' => $warehouse, 'received_date' => $date, 'status' => $status, 'total_before_tax' => $beforeTax, 'total_after_tax' => $afterTax, 'items' => $lines, 'pdf' => $pdf['name'] ?? null, 'images'=>array_map(static fn($photos)=>array_column($photos,'name'), $images)]);
+        $audit('import_bill', $billId, ['number' => $number, 'warehouse_id' => $warehouse, 'received_date' => $date, 'status' => $status, 'total_before_tax' => $beforeTax, 'total_after_tax' => $afterTax, 'items' => $lines, 'print_snapshot'=>$printSnapshot, 'pdf' => $pdf['name'] ?? null, 'images'=>array_map(static fn($photos)=>array_column($photos,'name'), $images)]);
         $pdo->commit();
         return 'Đã lưu phiếu nhập ' . $number . ($status === 'confirmed' ? ' và cập nhật tồn kho.' : ' ở trạng thái nháp.');
     } catch (Throwable $error) {

@@ -5,6 +5,7 @@ require_once __DIR__ . '/products.php';
 require_once __DIR__ . '/imports.php';
 require_once __DIR__ . '/attachments.php';
 require_once __DIR__ . '/exports.php';
+require_once __DIR__ . '/receipt-print.php';
 
 function managementText(array $input, string $key, int $max, bool $required = false): string
 {
@@ -46,6 +47,7 @@ function managementSnapshot(PDO $pdo, string $page, string $id): ?array
         $row['warehouses'] = [];
         foreach ($statement as $grant) $row['warehouses'][(string) $grant['warehouse_id']] = $grant['role'];
     }
+    if ($page === 'warehouses') $row['print_settings'] = warehousePrintSettings($pdo, $id);
     return $row;
 }
 
@@ -152,10 +154,14 @@ function saveManagement(PDO $pdo, string $page, string $actorId, array $input, a
                 $code = managementText($input, 'code', 32, true);
                 $name = managementText($input, 'name', 200, true);
                 $address = managementText($input, 'address', 500);
-                if ($id) $pdo->prepare('UPDATE warehouses SET code=?,name=?,address=?,status=? WHERE id=?')->execute([$code, $name, $address ?: null, $status, $id]);
+                if ($id) $pdo->prepare('UPDATE warehouses SET code=?,name=?,address=?,status=?,updated_at=GREATEST(CURRENT_TIMESTAMP(6),updated_at + INTERVAL 1 MICROSECOND) WHERE id=?')->execute([$code, $name, $address ?: null, $status, $id]);
                 else {
                     $pdo->prepare('INSERT INTO warehouses (code,name,address,status,created_by) VALUES (?,?,?,?,?)')->execute([$code, $name, $address ?: null, $status, $actorId]);
                     $id = $pdo->lastInsertId();
+                }
+                if (array_key_exists('print_settings', $input)) {
+                    if (!is_array($input['print_settings'])) throw new DomainException('Cấu hình in phiếu không hợp lệ.');
+                    saveWarehousePrintSettings($pdo, $id, $input['print_settings']);
                 }
             }
         } else {
@@ -215,7 +221,7 @@ function saveManagement(PDO $pdo, string $page, string $actorId, array $input, a
         if ($pdo->inTransaction()) $pdo->rollBack();
         if ($error instanceof PDOException && ($error->errorInfo[1] ?? 0) === 1451) throw new DomainException($page === 'warehouses'
             ? 'Không thể xóa kho có nhân viên, quyền truy cập, phiếu, quyết định hoặc nhật ký liên quan. Bạn có thể ngừng hoạt động kho để giữ lịch sử.'
-            : 'Không thể xóa nhân viên đang liên kết tài khoản. Hãy gỡ liên kết ở phần Tài khoản & phân quyền trước, hoặc ngừng hoạt động nhân viên.');
+            : 'Không thể xóa nhân viên đang liên kết tài khoản hoặc cấu hình người ký. Hãy gỡ liên kết trước, hoặc ngừng hoạt động nhân viên.');
         if ($error instanceof PDOException && ($error->errorInfo[1] ?? 0) === 1062) throw new DomainException($page === 'warehouses' ? 'Mã kho đã tồn tại. Vui lòng dùng mã khác.' : 'Tên đăng nhập hoặc mã nhân viên đã tồn tại.');
         throw $error;
     }
@@ -224,9 +230,19 @@ function saveManagement(PDO $pdo, string $page, string $actorId, array $input, a
 function loadManagement(PDO $pdo, string $page): array
 {
     $data = ['warehouses' => [], 'warehouseStatuses' => []];
-    foreach ($pdo->query('SELECT id,name,status FROM warehouses ORDER BY name,id') as $row) {
+    $printWarehouses = [];
+    foreach ($pdo->query('SELECT id,name,address,status,updated_at FROM warehouses ORDER BY name,id') as $row) {
         $data['warehouses'][(string) $row['id']] = $row['name'];
         $data['warehouseStatuses'][(string) $row['id']] = $row['status'];
+        $printWarehouses[(string)$row['id']] = $row;
+    }
+    if (in_array($page, ['warehouses','import-create','export-create'], true)) {
+        $data['printEmployees'] = $pdo->query('SELECT id,code,full_name,status FROM employees ORDER BY full_name,id')->fetchAll();
+        $data['printSettings'] = [];
+        foreach ($pdo->query('SELECT * FROM warehouse_print_settings') as $settings) $data['printSettings'][(string)$settings['warehouse_id']] = $settings;
+        $data['printWarehouses'] = $printWarehouses;
+        $data['printVersions'] = [];
+        foreach ($printWarehouses as $id=>$warehouse) $data['printVersions'][(string)$id] = receiptPrintConfigVersion($warehouse, $data['printSettings'][(string)$id] ?? []);
     }
     // ponytail: client-side filtering loads complete lists; move filters/pagination to SQL when data volume grows.
     if ($page === 'export-create') {
@@ -270,7 +286,7 @@ function loadManagement(PDO $pdo, string $page): array
             (SELECT COUNT(*) FROM employees e WHERE e.warehouse_id=w.id AND e.status='active') AS active_employee_count,
             (SELECT COUNT(*) FROM user_warehouses uw WHERE uw.warehouse_id=w.id) AS access_count
             FROM warehouses w ORDER BY w.id DESC")->fetchAll();
-        foreach ($data['warehouseRecords'] as &$row) { $row['id'] = (string) $row['id']; $row['address'] ??= ''; } unset($row);
+        foreach ($data['warehouseRecords'] as &$row) { $row['id'] = (string) $row['id']; $row['address'] ??= ''; $row['print_settings'] = $data['printSettings'][$row['id']] ?? []; } unset($row);
     } elseif ($page === 'suppliers') {
         $receipts = [];
         foreach ($pdo->query('SELECT b.id,b.supplier_id,b.number,b.received_date,b.invoice_number,b.status,w.name AS warehouse_name

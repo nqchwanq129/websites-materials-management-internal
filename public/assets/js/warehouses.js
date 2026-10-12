@@ -38,6 +38,7 @@ function openWarehouse(record = null) {
     for (const key of ['id', 'version', 'code', 'name', 'address', 'status']) {
         warehouseForm.elements.namedItem(key).value = record?.[key] || (key === 'status' ? 'active' : '');
     }
+    warehouseForm.querySelectorAll('[data-print-setting]').forEach(input => { input.value = record?.print_settings?.[input.dataset.printSetting] ?? ''; });
     document.getElementById('warehouse-dialog-title').textContent = record ? 'Chỉnh sửa kho' : 'Thêm kho';
     document.getElementById('warehouse-linked-summary').textContent = record
         ? `${record.employee_count} nhân viên · ${record.access_count} tài khoản được cấp quyền riêng`
