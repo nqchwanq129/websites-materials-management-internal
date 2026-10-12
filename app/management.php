@@ -227,11 +227,15 @@ function saveManagement(PDO $pdo, string $page, string $actorId, array $input, a
     }
 }
 
-function loadManagement(PDO $pdo, string $page): array
+function loadManagement(PDO $pdo, string $page, ?string $userId = null): array
 {
+    $access = $userId === null ? ['admin'=>true,'warehouses'=>[]] : userAccess($pdo, $userId);
+    if (!canAccessPage($access, $page)) throw new DomainException('Bạn không có quyền truy cập chức năng này.');
     $data = ['warehouses' => [], 'warehouseStatuses' => []];
     $printWarehouses = [];
     foreach ($pdo->query('SELECT id,name,address,status,updated_at FROM warehouses ORDER BY name,id') as $row) {
+        if (!canViewWarehouse($access, (string)$row['id'])) continue;
+        if (in_array($page, ['import-create','export-create'], true) && !canManageWarehouse($access, (string)$row['id'])) continue;
         $data['warehouses'][(string) $row['id']] = $row['name'];
         $data['warehouseStatuses'][(string) $row['id']] = $row['status'];
         $printWarehouses[(string)$row['id']] = $row;
@@ -239,24 +243,32 @@ function loadManagement(PDO $pdo, string $page): array
     if (in_array($page, ['warehouses','import-create','export-create'], true)) {
         $data['printEmployees'] = $pdo->query('SELECT id,code,full_name,status FROM employees ORDER BY full_name,id')->fetchAll();
         $data['printSettings'] = [];
-        foreach ($pdo->query('SELECT * FROM warehouse_print_settings') as $settings) $data['printSettings'][(string)$settings['warehouse_id']] = $settings;
+        foreach ($pdo->query('SELECT * FROM warehouse_print_settings') as $settings) if(isset($printWarehouses[(string)$settings['warehouse_id']])) $data['printSettings'][(string)$settings['warehouse_id']] = $settings;
         $data['printWarehouses'] = $printWarehouses;
         $data['printVersions'] = [];
         foreach ($printWarehouses as $id=>$warehouse) $data['printVersions'][(string)$id] = receiptPrintConfigVersion($warehouse, $data['printSettings'][(string)$id] ?? []);
     }
     // ponytail: client-side filtering loads complete lists; move filters/pagination to SQL when data volume grows.
     if ($page === 'export-create') {
-        $data['sources'] = loadExportSources($pdo);
+        $data['sources'] = loadExportSources($pdo, null, false, $access);
     } elseif ($page === 'exports') {
-        $data['exports'] = loadExports($pdo);
+        $data['exports'] = loadExports($pdo, $access);
     } elseif ($page === 'import-create') {
         $data['products'] = $pdo->query("SELECT id,code,name,category,unit,tracking_mode,updated_at AS version FROM products WHERE status='active' ORDER BY name,id")->fetchAll();
         $data['suppliers'] = $pdo->query("SELECT id,name,tax_code,address,phone,email FROM suppliers WHERE status='active' ORDER BY name,id")->fetchAll();
+        if (!$access['admin']) {
+            $productIds = array_fill_keys(array_column(loadProducts($pdo, '', $access),'id'),true);
+            $data['products'] = array_values(array_filter($data['products'],static fn($row)=>isset($productIds[(string)$row['id']])));
+            $supplierIds = [];
+            foreach (loadImports($pdo,$access) as $bill) if ($bill['supplier_id'] !== null) $supplierIds[(string)$bill['supplier_id']] = true;
+            $data['suppliers'] = array_values(array_filter($data['suppliers'],static fn($row)=>isset($supplierIds[(string)$row['id']])));
+        }
     } elseif ($page === 'imports') {
-        $data['imports'] = loadImports($pdo);
+        $data['imports'] = loadImports($pdo, $access);
         $data['decisions'] = $pdo->query('SELECT id,warehouse_id,number FROM decisions ORDER BY issued_date DESC,id DESC')->fetchAll();
+        $data['decisions'] = array_values(array_filter($data['decisions'],static fn($row)=>canViewWarehouse($access,(string)$row['warehouse_id'])));
     } elseif (array_key_exists($page, productPages())) {
-        $data['products'] = loadProducts($pdo, productPages()[$page]);
+        $data['products'] = loadProducts($pdo, productPages()[$page], $access);
     } elseif ($page === 'accounts') {
         $data['employees'] = $data['employeeOptions'] = [];
         foreach ($pdo->query('SELECT id,code,full_name FROM employees ORDER BY full_name,id') as $row) {
@@ -289,13 +301,15 @@ function loadManagement(PDO $pdo, string $page): array
         foreach ($data['warehouseRecords'] as &$row) { $row['id'] = (string) $row['id']; $row['address'] ??= ''; $row['print_settings'] = $data['printSettings'][$row['id']] ?? []; } unset($row);
     } elseif ($page === 'suppliers') {
         $receipts = [];
-        foreach ($pdo->query('SELECT b.id,b.supplier_id,b.number,b.received_date,b.invoice_number,b.status,w.name AS warehouse_name
+        foreach ($pdo->query('SELECT b.id,b.supplier_id,b.number,b.received_date,b.invoice_number,b.status,b.warehouse_id,w.name AS warehouse_name
             FROM import_bill b JOIN warehouses w ON w.id=b.warehouse_id WHERE b.supplier_id IS NOT NULL ORDER BY b.received_date DESC,b.id DESC') as $bill) {
+            if (!canViewWarehouse($access,(string)$bill['warehouse_id'])) continue;
             $receipts[$bill['supplier_id']][] = ['id' => (string) $bill['id'], 'number' => $bill['number'], 'received_date' => $bill['received_date'],
                 'invoice_number' => $bill['invoice_number'] ?? '', 'status' => $bill['status'], 'warehouse_name' => $bill['warehouse_name']];
         }
         $data['suppliers'] = [];
         foreach ($pdo->query('SELECT id,name,tax_code,address,phone,email,status,created_at,updated_at FROM suppliers ORDER BY id DESC') as $row) {
+            if (!$access['admin'] && !isset($receipts[$row['id']])) continue;
             $row['id'] = (string) $row['id'];
             foreach (['tax_code', 'address', 'phone', 'email'] as $key) $row[$key] ??= '';
             $row['receipts'] = $receipts[$row['id']] ?? [];
@@ -313,6 +327,7 @@ function loadManagement(PDO $pdo, string $page): array
             foreach ($pdo->query("SELECT d.id,d.updated_at AS version,d.decision_id,d.decision_status,d.product_id,d.product_name,d.unit,d.$quantity AS quantity,b.warehouse_id,b.number,b.$date AS date,b.status,w.name AS warehouse_name
                 FROM $details d JOIN $bills b ON b.id=d.$billId JOIN warehouses w ON w.id=b.warehouse_id
                 WHERE d.decision_id IS NOT NULL OR (d.decision_status='pending' AND b.status='confirmed') ORDER BY b.$date DESC,d.id DESC") as $item) {
+                if (!canViewWarehouse($access,(string)$item['warehouse_id'])) continue;
                 $item['id'] = (string) $item['id'];
                 $item['direction'] = $direction;
                 $data['decisionLines'][] = $item;
@@ -321,8 +336,10 @@ function loadManagement(PDO $pdo, string $page): array
         }
         $data['decisions'] = $pdo->query('SELECT d.id,d.updated_at AS version,d.number,d.issued_date,d.decision_type,d.issuing_authority,d.content,d.warehouse_id,w.name AS warehouse_name
             FROM decisions d JOIN warehouses w ON w.id=d.warehouse_id ORDER BY d.issued_date DESC,d.id DESC')->fetchAll();
+        $data['decisions'] = array_values(array_filter($data['decisions'],static fn($row)=>canViewWarehouse($access,(string)$row['warehouse_id'])));
         foreach ($data['decisions'] as &$row) {
             $row['id'] = (string) $row['id']; $row['content'] ??= '';
+            $row['can_link'] = canManageWarehouse($access,(string)$row['warehouse_id']);
             $row['items'] = $items[$row['id']] ?? [];
             $row['attachments'] = $attachments[$row['id']] ?? [];
             $links = ['import' => [], 'export' => []];

@@ -1,10 +1,17 @@
 <?php
 declare(strict_types=1);
+require dirname(__DIR__) . '/app/auth.php';
 // Render the dashboard without any database connection: php tests/home.php [--render].
 function escapeHtml(string $value): string { return htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); }
 $user = ['username' => 'preview-admin', 'full_name' => 'Quản trị viên <script>', 'is_super_admin' => 1];
 if(in_array('--warehouse-label',$argv,true)) $user['is_super_admin']=0;
 $user['employee_warehouse_name']='Kho Hải Phòng <script> với tên dài để kiểm tra giao diện';
+$rolePreview = in_array('--keeper',$argv,true) ? 'keeper' : (in_array('--viewer',$argv,true) || in_array('--warehouse-label',$argv,true) ? 'viewer' : '');
+if ($rolePreview !== '') {
+    $user['is_super_admin']=0;
+    $access=['admin'=>false,'warehouses'=>['1'=>$rolePreview],'warehouse_names'=>['1'=>$user['employee_warehouse_name']]];
+    if (in_array('--mixed',$argv,true)) { $access['warehouses']['2']='viewer'; $access['warehouse_names']['2']='Kho chỉ xem'; }
+}
 $_SESSION = ['csrf_token' => str_repeat('a', 64)];
 $preview = 'dashboard';
 $productPages = ['materials' => 3, 'spare-parts' => 3, 'tools' => 2, 'fixed-assets' => 2, 'other-products' => 2];
@@ -32,6 +39,11 @@ if ($preview === 'reports') {
     $previewOnly = !in_array('--live-report', $argv, true);
     $sampleRows['reports'][1] = $kind === 'inventory' ? 60 : 12;
 } else require __DIR__ . '/fixtures/' . (isset($productPages[$preview]) ? 'products' : $preview) . '.php';
+if ($rolePreview !== '') {
+    if (isset($managementData['imports'])) foreach ($managementData['imports'] as &$bill) $bill['can_edit']=canManageWarehouse($access,(string)$bill['warehouse_id']); unset($bill);
+    if (isset($managementData['decisions'])) foreach ($managementData['decisions'] as &$decision) $decision['can_link']=canManageWarehouse($access,(string)$decision['warehouse_id']); unset($decision);
+    if (isset($reportData)) $reportData['accounts']=[];
+}
 if (in_array($preview, ['warehouses','import-create','export-create'], true)) {
     $managementData['printEmployees'] = [['id'=>'1','code'=>'NV01','full_name'=>'Người ký <script>','status'=>'active']];
     $managementData['printSettings'] = ['1'=>['unit_name'=>'Đơn vị thử','department_name'=>'Bộ phận thử','department_address'=>'Địa chỉ bộ phận thử',
@@ -50,7 +62,7 @@ foreach ($assets as $asset) {
         throw new RuntimeException('CSS/JavaScript must use a content version to avoid stale browser caches: ' . $asset[1]);
     }
 }
-if(!str_contains($html,'title="'.escapeHtml($user['is_super_admin']?'Phạm vi quản trị: Toàn hệ thống':'Kho của bạn: '.$user['employee_warehouse_name']).'"')) throw new RuntimeException('Topbar warehouse label or escaping failed.');
+if(!str_contains($html,'title="'.escapeHtml($user['is_super_admin']?'Phạm vi quản trị: Toàn hệ thống':'Kho của bạn: '.$topbarWarehouse).'"')) throw new RuntimeException('Topbar warehouse label or escaping failed.');
 if (str_contains($html, 'Quản trị viên <script>') || !str_contains($html, 'Quản trị viên &lt;script&gt;')
     || substr_count($html, $sampleRows[$preview][0]) !== $sampleRows[$preview][1]
     || !str_contains($html, 'name="csrf_token"')

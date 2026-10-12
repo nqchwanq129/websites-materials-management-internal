@@ -12,12 +12,12 @@ function reportCategories(): array
 }
 function loadReportData(PDO $pdo, string $userId): array
 {
-    $user=findUser($pdo,'id',$userId);
-    if(!userCanSignIn($user) || !(int)$user['is_super_admin']) throw new DomainException('Bạn không có quyền xem báo cáo toàn hệ thống.');
+    $access=userAccess($pdo,$userId);
+    if (!canAccessPage($access,'reports')) throw new DomainException('Bạn không có quyền xem báo cáo.');
     $pdo->beginTransaction();
     try {
         $data=['warehouses'=>[],'products'=>[],'movements'=>[],'receipts'=>[],'accounts'=>[]];
-        foreach($pdo->query('SELECT id,name FROM warehouses ORDER BY name,id') as $row) $data['warehouses'][(string)$row['id']]=$row['name'];
+        foreach($pdo->query('SELECT id,name FROM warehouses ORDER BY name,id') as $row) if(canViewWarehouse($access,(string)$row['id'])) $data['warehouses'][(string)$row['id']]=$row['name'];
         foreach($pdo->query('SELECT id,code,name,category,unit,tracking_mode FROM products ORDER BY code,id') as $row) {
             $row['id']=(string)$row['id']; $data['products'][$row['id']]=$row;
         }
@@ -28,6 +28,7 @@ function loadReportData(PDO $pdo, string $userId): array
                 q.number AS decision_number,b.id AS bill_id,b.number,b.$date AS date,b.status,b.warehouse_id,b.total_before_tax AS bill_total
                 FROM $bills b LEFT JOIN $details d ON d.$billId=b.id LEFT JOIN decisions q ON q.id=d.decision_id
                 WHERE b.status='confirmed' ORDER BY b.$date,b.id,d.id") as $movement) {
+                if(!canViewWarehouse($access,(string)$movement['warehouse_id'])) continue;
                 $key=$direction.':'.$movement['bill_id'];
                 $data['receipts'][$key]??=['id'=>(string)$movement['bill_id'],'direction'=>$direction,'number'=>$movement['number'],'date'=>$movement['date'],
                     'warehouse_id'=>(string)$movement['warehouse_id'],'header'=>$movement['bill_total'],'details'=>'0.000000','line_count'=>0];
@@ -38,7 +39,8 @@ function loadReportData(PDO $pdo, string $userId): array
                 $movement['direction']=$direction; unset($movement['bill_total']); $data['movements'][]=$movement;
             }
         }
-        foreach($pdo->query("SELECT CASE WHEN u.is_super_admin=1 THEN 'Quản trị viên'
+        if (!$access['admin']) $data['products']=array_intersect_key($data['products'],array_fill_keys(array_column($data['movements'],'product_id'),true));
+        if ($access['admin']) foreach($pdo->query("SELECT CASE WHEN u.is_super_admin=1 THEN 'Quản trị viên'
             WHEN EXISTS(SELECT 1 FROM user_warehouses g WHERE g.user_id=u.id AND g.role='keeper') THEN 'Thủ kho'
             WHEN EXISTS(SELECT 1 FROM user_warehouses g WHERE g.user_id=u.id AND g.role='viewer') THEN 'Người xem'
             ELSE 'Chưa phân quyền' END AS role,COUNT(*) AS count FROM users u GROUP BY role") as $row) $data['accounts'][$row['role']]=(int)$row['count'];

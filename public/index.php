@@ -90,7 +90,9 @@ if (in_array($page, ['home', 'exports', 'export-create', 'export-file', 'export-
         if ($method === 'POST' && $page !== 'home') respondJson(['ok' => false, 'message' => 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.'], 401);
         redirectTo('login');
     }
-    if ($page !== 'home' && (int) $user['is_super_admin'] !== 1) {
+    try { $access = userAccess(connectDatabase(), (string)$user['id']); }
+    catch (Throwable $error) { error_log('QLVT access: '.$error->getMessage()); http_response_code(503); exit('Không thể kiểm tra quyền truy cập lúc này.'); }
+    if (!canAccessPage($access, $page, $method === 'POST')) {
         if ($method === 'POST') respondJson(['ok' => false, 'message' => 'Bạn không có quyền quản lý dữ liệu này.'], 403);
         http_response_code(403);
         exit('Bạn không có quyền truy cập trang quản lý này.');
@@ -123,24 +125,24 @@ if (in_array($page, ['home', 'exports', 'export-create', 'export-file', 'export-
     }
     if (in_array($page, ['import-excel', 'export-excel'], true)) {
         require_once dirname(__DIR__) . '/app/receipt-excel.php';
-        try { downloadReceiptExcel(connectDatabase(), $page === 'import-excel' ? 'import' : 'export', $_GET['id'] ?? null); }
+        try { downloadReceiptExcel(connectDatabase(), $page === 'import-excel' ? 'import' : 'export', $_GET['id'] ?? null, (string)$user['id']); }
         catch (DomainException $error) { http_response_code(400); exit(escapeHtml($error->getMessage())); }
         catch (Throwable $error) { error_log('QLVT receipt Excel: ' . $error->getMessage()); http_response_code(503); exit('Không thể xuất Excel lúc này. Vui lòng thử lại sau.'); }
     }
     if ($page === 'import-image') {
-        try { serveAttachment(connectDatabase(), $_GET['id'] ?? null, 'import_bill_detail_id'); }
+        try { serveAttachment(connectDatabase(), $_GET['id'] ?? null, 'import_bill_detail_id', (string)$user['id']); }
         catch (Throwable $error) { error_log('QLVT import image: '.$error->getMessage()); http_response_code(503); exit('Không thể tải ảnh lúc này.'); }
     }
     if ($page === 'import-file') {
-        try { serveAttachment(connectDatabase(), $_GET['id'] ?? null, 'import_bill_id', ($_GET['preview'] ?? '') === '1'); }
+        try { serveAttachment(connectDatabase(), $_GET['id'] ?? null, 'import_bill_id', (string)$user['id'], ($_GET['preview'] ?? '') === '1'); }
         catch (Throwable $error) { error_log('QLVT import PDF: ' . $error->getMessage()); http_response_code(503); exit('Không thể tải file lúc này.'); }
     }
     if ($page === 'export-file') {
-        try { serveAttachment(connectDatabase(), $_GET['id'] ?? null, 'export_bill_id'); }
+        try { serveAttachment(connectDatabase(), $_GET['id'] ?? null, 'export_bill_id', (string)$user['id']); }
         catch (Throwable $error) { error_log('QLVT export PDF: ' . $error->getMessage()); http_response_code(503); exit('Không thể tải file lúc này.'); }
     }
     if ($page === 'decision-file') {
-        try { downloadDecisionPdf(connectDatabase(), $_GET['id'] ?? null); }
+        try { downloadDecisionPdf(connectDatabase(), $_GET['id'] ?? null, (string)$user['id']); }
         catch (Throwable $error) { error_log('QLVT PDF: ' . $error->getMessage()); http_response_code(503); exit('Không thể tải file lúc này.'); }
     }
     if ($page === 'reports') {
@@ -165,7 +167,7 @@ if (in_array($page, ['home', 'exports', 'export-create', 'export-file', 'export-
             http_response_code(503); exit('Không thể tải số liệu tổng quan lúc này. Vui lòng thử lại sau.');
         }
     } else {
-        try { $managementData = loadManagement(connectDatabase(), $page); }
+        try { $managementData = loadManagement(connectDatabase(), $page, (string)$user['id']); }
         catch (Throwable $error) {
             error_log('QLVT management read: ' . $error->getMessage());
             http_response_code(503);

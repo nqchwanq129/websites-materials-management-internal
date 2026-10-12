@@ -93,19 +93,24 @@ function updateDecisionLines() {
     empty.textContent = warehouse ? 'Không có dòng hàng phù hợp để gắn quyết định.' : 'Chọn kho để xem các dòng hàng có thể liên kết.';
 }
 function editDecision(decision = null) {
+    if (decision?.can_link === false) return;
     decisionForm.reset();
     decisionForm.querySelector('[data-form-error]').hidden = true;
     decisionForm.elements.id.value = decision?.id || '';
     decisionForm.elements.version.value = decision?.version || '';
     decisionForm.elements.links_version.value = decision?.links_version || '';
-    document.getElementById('decision-editor-title').textContent = decision ? 'Sửa / Gắn quyết định' : 'Tạo quyết định';
+    const linksOnly = decisionForm.dataset.linksOnly === 'true';
+    document.getElementById('decision-editor-title').textContent = linksOnly ? 'Gắn hàng hóa vào quyết định' : decision ? 'Sửa / Gắn quyết định' : 'Tạo quyết định';
     for (const key of ['number', 'issued_date', 'decision_type', 'issuing_authority', 'content']) decisionForm.elements[key].value = decision?.[key] || (key === 'decision_type' ? 'increase' : '');
+    for (const key of ['number','issued_date','issuing_authority','content']) decisionForm.elements[key].readOnly = linksOnly;
+    for (const option of decisionForm.elements.decision_type.options) option.disabled = linksOnly && option.value !== decision?.decision_type;
+    decisionForm.elements.pdf.disabled = linksOnly;
     decisionForm.elements.warehouse.value = decision ? String(decision.warehouse_id) : '';
     for (const option of decisionForm.elements.warehouse.options) option.disabled = option.dataset.status === 'inactive' && option.value !== String(decision?.warehouse_id || '');
     decisionForm.elements.warehouse.disabled = false;
     // Keep the warehouse submitted, but prevent accidental changes on linked decisions.
     decisionForm.elements.warehouse.querySelectorAll('option').forEach(option => {
-        if (decision?.items.length && option.value !== String(decision.warehouse_id)) option.disabled = true;
+        if ((decision?.items.length || linksOnly) && option.value !== String(decision?.warehouse_id)) option.disabled = true;
     });
     document.getElementById('decision-line-search').value = '';
     const rows = document.getElementById('decision-line-options'); rows.replaceChildren();
@@ -125,7 +130,7 @@ function editDecision(decision = null) {
     renderDecisionFiles(document.getElementById('decision-editor-files'), decision?.attachments || []);
     updateDecisionLines(); decisionEditor.showModal(); decisionEditor.querySelector('.account-dialog-body').scrollTop = 0;
 }
-document.getElementById('create-decision').addEventListener('click', () => editDecision());
+document.getElementById('create-decision')?.addEventListener('click', () => editDecision());
 document.querySelectorAll('.edit-decision').forEach(button => button.addEventListener('click', () => editDecision(JSON.parse(button.closest('[data-decision]').dataset.decision))));
 decisionForm.querySelectorAll('[data-close-decision]').forEach(button => button.addEventListener('click', () => decisionEditor.close()));
 decisionForm.elements.warehouse.addEventListener('change', updateDecisionLines);

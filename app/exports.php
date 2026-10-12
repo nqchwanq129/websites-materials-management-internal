@@ -4,7 +4,7 @@ function exportTypes(): array
 {
     return ['allocation' => 'Cấp phát', 'transfer' => 'Điều chuyển kho', 'disposal' => 'Thanh lý / Loại bỏ', 'adjustment' => 'Điều chỉnh giảm'];
 }
-function loadExportSources(PDO $pdo, ?string $id = null, bool $lock = false): array
+function loadExportSources(PDO $pdo, ?string $id = null, bool $lock = false, ?array $access = null): array
 {
     // ponytail: load eligible lots for the form; move search/pagination to SQL when receipt volume grows.
     $stmt = $pdo->prepare("SELECT d.*,b.number AS receipt_number,b.received_date,b.warehouse_id,w.name AS warehouse_name,p.code AS product_code,
@@ -18,6 +18,7 @@ function loadExportSources(PDO $pdo, ?string $id = null, bool $lock = false): ar
         " . ($id === null ? '' : ' AND d.id=?') . ' ORDER BY b.received_date,d.id' . ($lock ? ' FOR UPDATE' : ''));
     $stmt->execute($id === null ? [] : [$id]); $records = [];
     foreach ($stmt as $row) {
+        if ($access !== null && !canManageWarehouse($access, (string)$row['warehouse_id'])) continue;
         $row['id'] = (string) $row['id']; $row['warehouse_id'] = (string) $row['warehouse_id'];
         $row['remaining_quantity'] = bcsub($row['received_quantity'], $row['used_quantity'], 6);
         $row['remaining_amount'] = bcsub($row['amount_before_tax'], $row['used_amount'], 6);
@@ -45,7 +46,7 @@ function saveExport(PDO $pdo, string $actorId, array $input, array $files = []):
         // ponytail: shared global management lock prevents double spending; use ordered lot locks if write volume grows.
         $pdo->query('SELECT id FROM users ORDER BY id FOR UPDATE')->fetchAll();
         $actor = findUser($pdo, 'id', $actorId);
-        if (!userCanSignIn($actor) || !(int) $actor['is_super_admin'] || warehousePermission($pdo, $actorId, $warehouse) !== 'keeper') throw new DomainException('Bạn không có quyền xuất kho hoặc kho đã ngừng hoạt động.');
+        if (!userCanSignIn($actor) || warehousePermission($pdo, $actorId, $warehouse) !== 'keeper') throw new DomainException('Bạn không có quyền xuất kho hoặc kho đã ngừng hoạt động.');
         if ($destination !== null && warehousePermission($pdo, $actorId, $destination) !== 'keeper') throw new DomainException('Kho nhận không tồn tại hoặc đã ngừng hoạt động.');
         $sources = []; $lines = []; $total = '0.000000';
         foreach ($items as $item) {
@@ -106,12 +107,13 @@ function saveExport(PDO $pdo, string $actorId, array $input, array $files = []):
         throw $error;
     }
 }
-function loadExports(PDO $pdo): array
+function loadExports(PDO $pdo, ?array $access = null): array
 {
     $records = [];
     foreach ($pdo->query('SELECT b.*,w.name AS warehouse_name,z.name AS destination_warehouse_name,COALESCE(e.full_name,u.username) AS creator_name
         FROM export_bill b JOIN warehouses w ON w.id=b.warehouse_id LEFT JOIN warehouses z ON z.id=b.destination_warehouse_id
         LEFT JOIN users u ON u.id=b.created_by LEFT JOIN employees e ON e.id=u.employee_id ORDER BY b.issued_date DESC,b.id DESC') as $row) {
+        if ($access !== null && !canViewWarehouse($access, (string)$row['warehouse_id'])) continue;
         $row['id'] = (string) $row['id']; $row['warehouse_id'] = (string) $row['warehouse_id'];
         $row['total_before_tax_display'] = productQuantity($row['total_before_tax']) . ' ₫';
         $records[$row['id']] = $row + ['items' => [], 'attachments' => [], 'transfers' => []];
@@ -119,11 +121,14 @@ function loadExports(PDO $pdo): array
     foreach ($pdo->query('SELECT d.*,q.number AS decision_number,p.code AS product_code,b.number AS source_number,b.received_date AS source_date
         FROM export_bill_details d JOIN import_bill_details s ON s.id=d.source_import_detail_id JOIN import_bill b ON b.id=s.import_bill_id
         JOIN products p ON p.id=d.product_id LEFT JOIN decisions q ON q.id=d.decision_id ORDER BY d.id') as $item) {
+        if (!isset($records[(string)$item['export_bill_id']])) continue;
         foreach (['issued_quantity','unit_price','amount_before_tax'] as $field) $item[$field . '_display'] = productQuantity($item[$field]);
         $records[(string) $item['export_bill_id']]['items'][] = $item;
     }
-    foreach ($pdo->query('SELECT id,export_bill_id,original_name FROM attachments WHERE export_bill_id IS NOT NULL ORDER BY id') as $file) $records[(string) $file['export_bill_id']]['attachments'][] = $file;
-    foreach ($pdo->query('SELECT DISTINCT e.export_bill_id,b.id,b.number,b.status FROM import_bill_details d JOIN import_bill b ON b.id=d.import_bill_id
-        JOIN export_bill_details e ON e.id=d.source_export_detail_id ORDER BY b.id') as $transfer) $records[(string) $transfer['export_bill_id']]['transfers'][] = $transfer;
+    foreach ($pdo->query('SELECT id,export_bill_id,original_name FROM attachments WHERE export_bill_id IS NOT NULL ORDER BY id') as $file) if (isset($records[(string)$file['export_bill_id']])) $records[(string) $file['export_bill_id']]['attachments'][] = $file;
+    foreach ($pdo->query('SELECT DISTINCT e.export_bill_id,b.id,b.number,b.status,b.warehouse_id FROM import_bill_details d JOIN import_bill b ON b.id=d.import_bill_id
+        JOIN export_bill_details e ON e.id=d.source_export_detail_id ORDER BY b.id') as $transfer) {
+        if (isset($records[(string)$transfer['export_bill_id']]) && ($access === null || canViewWarehouse($access, (string)$transfer['warehouse_id']))) $records[(string)$transfer['export_bill_id']]['transfers'][] = $transfer;
+    }
     return array_values($records);
 }

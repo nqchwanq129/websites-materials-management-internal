@@ -4,7 +4,7 @@ $exports = $managementData['exports']; $types = exportTypes();
 $statuses = ['draft'=>'Nháp','confirmed'=>'Đã xác nhận','cancelled'=>'Đã hủy'];
 require dirname(__DIR__) . '/layouts/dashboard-start.php';
 ?>
-<section class="page-heading"><div><p class="eyebrow">XUẤT KHO</p><h1>Danh sách phiếu xuất<span>.</span></h1><p>Tra cứu hàng xuất, người nhận và các phiếu điều chuyển giữa kho.</p></div><a class="button button-primary" href="index.php?page=export-create"><?= $icon('plus') ?>Tạo phiếu xuất</a></section>
+<section class="page-heading"><div><p class="eyebrow">XUẤT KHO</p><h1>Danh sách phiếu xuất<span>.</span></h1><p>Tra cứu hàng xuất, người nhận và các phiếu điều chuyển giữa kho.</p></div><?php if (canAccessPage($access,'export-create')): ?><a class="button button-primary" href="index.php?page=export-create"><?= $icon('plus') ?>Tạo phiếu xuất</a><?php endif; ?></section>
 <p class="account-notice"<?= empty($managementNotice)?' hidden':' data-management-flash' ?>><?= escapeHtml($managementNotice??'') ?></p>
 <?php if ($previewOnly??false): ?><div class="demo-note"><span class="demo-tag">Bản xem trước</span><span>Danh sách phiếu xuất bên dưới là dữ liệu mẫu.</span></div><?php endif; ?>
 <section class="metrics" aria-label="Tổng quan phiếu xuất">

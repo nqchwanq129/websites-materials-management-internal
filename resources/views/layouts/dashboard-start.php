@@ -1,18 +1,28 @@
 <?php
 $assetUrl = static fn(string $path): string => $path . '?v=' . substr(hash_file('sha256', dirname(__DIR__, 3) . '/public/' . $path), 0, 12);
 $displayName = $user['full_name'] ?? $user['username'];
-$topbarWarehouse = (int)$user['is_super_admin'] === 1 ? 'Toàn hệ thống' : ($user['employee_warehouse_name'] ?? 'Chưa gán kho');
+$access = $access ?? ['admin'=>(int)$user['is_super_admin'] === 1, 'warehouses'=>[], 'warehouse_names'=>[]];
+$topbarWarehouse = $access['admin'] ? 'Toàn hệ thống' : (count($access['warehouses']) > 1 ? count($access['warehouses']).' kho được cấp' : (array_values($access['warehouse_names'] ?? [])[0] ?? 'Chưa được cấp quyền kho'));
 $topbarWarehouseHint = ((int)$user['is_super_admin'] === 1 ? 'Phạm vi quản trị: ' : 'Kho của bạn: ') . $topbarWarehouse;
 $navigation = [
-    ['box', 'Hàng hóa', array_map(static fn($label, $page) => [$label, (int) $user['is_super_admin'] === 1 ? 'index.php?page=' . $page : ''], ['Danh sách hàng hóa', 'Vật tư', 'Phụ tùng thay thế', 'Công cụ, dụng cụ', 'Tài sản cố định', 'Hàng hóa khác'], ['products', 'materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products'])],
-    ['down', 'Phiếu nhập kho', [['Danh sách phiếu nhập', (int) $user['is_super_admin'] === 1 ? 'index.php?page=imports' : ''], ['Tạo phiếu nhập', (int) $user['is_super_admin'] === 1 ? 'index.php?page=import-create' : '']]],
-    ['up', 'Phiếu xuất kho', [['Danh sách phiếu xuất', (int) $user['is_super_admin'] === 1 ? 'index.php?page=exports' : ''], ['Tạo phiếu xuất', (int) $user['is_super_admin'] === 1 ? 'index.php?page=export-create' : '']]],
-    ['warehouse', 'Kho hàng', [['Danh sách kho', (int) $user['is_super_admin'] === 1 ? 'index.php?page=warehouses' : ''], ['Tồn kho', '']]],
-    ['file', 'Quyết định', [['Danh sách quyết định', (int) $user['is_super_admin'] === 1 ? 'index.php?page=decisions' : '']]],
-    ['chart', 'Báo cáo & thống kê', array_map(static fn($label, $kind) => [$label, (int) $user['is_super_admin'] === 1 ? 'index.php?page=reports&kind=' . $kind : ''], ['Nhập · xuất · tồn', 'Báo cáo vật tư', 'Báo cáo phụ tùng', 'Báo cáo công cụ, dụng cụ', 'Báo cáo tài sản cố định'], ['inventory', 'materials', 'parts', 'tools', 'assets'])],
-    ['users', 'Danh mục', [['Nhà cung cấp', (int) $user['is_super_admin'] === 1 ? 'index.php?page=suppliers' : ''], ['Nhân viên', (int) $user['is_super_admin'] === 1 ? 'index.php?page=employees' : '']]],
-    ['shield', 'Hệ thống', [['Tài khoản & phân quyền', (int) $user['is_super_admin'] === 1 ? 'index.php?page=accounts' : ''], ['Nhật ký thao tác', (int) $user['is_super_admin'] === 1 ? 'index.php?page=audit' : '']]],
+    ['box', 'Hàng hóa', array_map(static fn($label, $page) => [$label, 'index.php?page=' . $page], ['Danh sách hàng hóa', 'Vật tư', 'Phụ tùng thay thế', 'Công cụ, dụng cụ', 'Tài sản cố định', 'Hàng hóa khác'], ['products', 'materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products'])],
+    ['down', 'Phiếu nhập kho', [['Danh sách phiếu nhập', 'index.php?page=imports'], ['Tạo phiếu nhập', 'index.php?page=import-create']]],
+    ['up', 'Phiếu xuất kho', [['Danh sách phiếu xuất', 'index.php?page=exports'], ['Tạo phiếu xuất', 'index.php?page=export-create']]],
+    ['warehouse', 'Kho hàng', [['Danh sách kho', 'index.php?page=warehouses'], ['Tồn kho', '']]],
+    ['file', 'Quyết định', [['Danh sách quyết định', 'index.php?page=decisions']]],
+    ['chart', 'Báo cáo & thống kê', array_map(static fn($label, $kind) => [$label, 'index.php?page=reports&kind=' . $kind], ['Nhập · xuất · tồn', 'Báo cáo vật tư', 'Báo cáo phụ tùng', 'Báo cáo công cụ, dụng cụ', 'Báo cáo tài sản cố định'], ['inventory', 'materials', 'parts', 'tools', 'assets'])],
+    ['users', 'Danh mục', [['Nhà cung cấp', 'index.php?page=suppliers'], ['Nhân viên', 'index.php?page=employees']]],
+    ['shield', 'Hệ thống', [['Tài khoản & phân quyền', 'index.php?page=accounts'], ['Nhật ký thao tác', 'index.php?page=audit']]],
 ];
+if (!$access['admin']) {
+    foreach ($navigation as &$group) {
+        $group[2] = array_values(array_filter($group[2], static function ($link) use ($access): bool {
+            parse_str((string)parse_url($link[1],PHP_URL_QUERY),$query);
+            return isset($query['page']) && canAccessPage($access,$query['page']);
+        }));
+    } unset($group);
+    $navigation = array_values(array_filter($navigation,static fn($group)=>(bool)$group[2]));
+}
 $icons = [
     'grid' => '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
     'chart' => '<path d="M4 4v16h16M8 15v-4m5 4V7m5 8v-6"/>',
@@ -88,7 +98,7 @@ $openGroup = ['exports' => 'Phiếu xuất kho', 'export-create' => 'Phiếu xu�
         <?php endforeach; ?>
         <p class="nav-empty" role="status" hidden>Không tìm thấy chức năng phù hợp.</p>
         </nav>
-        <div class="sidebar-bottom"><button class="nav-item" type="button" data-feature="Hướng dẫn sử dụng"><?= $icon('help') ?>Hướng dẫn sử dụng</button><div class="sidebar-account"><span class="avatar" data-user-initial><?= escapeHtml(mb_strtoupper(mb_substr($displayName, 0, 1))) ?></span><div><strong data-user-name><?= escapeHtml($displayName) ?></strong><small><?= (int) $user['is_super_admin'] === 1 ? 'Quản trị viên' : 'Nhân viên' ?></small></div><form action="index.php?page=logout" method="post"><input type="hidden" name="csrf_token" value="<?= escapeHtml($_SESSION['csrf_token']) ?>"><button class="icon-button" type="submit" aria-label="Đăng xuất" title="Đăng xuất"><?= $icon('logout') ?></button></form></div></div>
+        <div class="sidebar-bottom"><button class="nav-item" type="button" data-feature="Hướng dẫn sử dụng"><?= $icon('help') ?>Hướng dẫn sử dụng</button><div class="sidebar-account"><span class="avatar" data-user-initial><?= escapeHtml(mb_strtoupper(mb_substr($displayName, 0, 1))) ?></span><div><strong data-user-name><?= escapeHtml($displayName) ?></strong><small><?= $access['admin'] ? 'Quản trị viên' : (in_array('keeper', $access['warehouses'], true) ? 'Thủ kho' : ($access['warehouses'] ? 'Người xem' : 'Chưa phân quyền')) ?></small></div><form action="index.php?page=logout" method="post"><input type="hidden" name="csrf_token" value="<?= escapeHtml($_SESSION['csrf_token']) ?>"><button class="icon-button" type="submit" aria-label="Đăng xuất" title="Đăng xuất"><?= $icon('logout') ?></button></form></div></div>
     </aside>
     <button class="menu-backdrop" type="button" aria-label="Đóng menu" hidden></button>
     <div class="content-shell">

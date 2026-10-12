@@ -1254,6 +1254,40 @@ try {
             await evaluate('passwordDialog.close();window.fetch=personalNativeFetch');
         }
     }
+    for (const [route, role, mixed] of [['imports','viewer',false],['imports','keeper',true],['decisions','keeper',false],['products','viewer',false],['reports','viewer',false]]) {
+        const roleRender=spawnSync(php,['tests/home.php','--'+route,'--'+role,...(mixed?['--mixed']:[]),'--render'],{encoding:'utf8',windowsHide:true});
+        assert.equal(roleRender.status,0,roleRender.stderr);
+        await page('Page.navigate',{url:process.env.LOGIN_URL || 'http://localhost/qlvt-remake/public/'});
+        for(let attempt=0;attempt<100;attempt++){if(await evaluate('document.readyState==="complete" && Boolean(document.getElementById("login-form"))'))break;await new Promise(resolve=>setTimeout(resolve,100));}
+        const roleFrame=await page('Page.getFrameTree');
+        await page('Page.setDocumentContent',{frameId:roleFrame.frameTree.frame.id,html:roleRender.stdout});
+        for(let attempt=0;attempt<100;attempt++){if(await evaluate(`document.readyState==="complete" && typeof ${route==='imports'?'openImport':route==='decisions'?'editDecision':route==='products'?'editProduct':'drawReportChart'} === "function"`))break;await new Promise(resolve=>setTimeout(resolve,100));}
+        assert.equal(await evaluate('Boolean(document.querySelector("a[href=\\"index.php?page=accounts\\"],a[href=\\"index.php?page=employees\\"],a[href=\\"index.php?page=warehouses\\"],a[href=\\"index.php?page=audit\\"]"))'),false,'Admin-only sidebar entries must be absent.');
+        if(route==='imports') {
+            assert.equal(await evaluate('Boolean(document.querySelector("a[href=\\"index.php?page=import-create\\"]"))'),role==='keeper');
+            await evaluate('openImport(JSON.parse(importRows.find(row=>JSON.parse(row.dataset.import).can_edit===false).dataset.import))');
+            assert.equal(await evaluate('document.getElementById("import-edit").hidden'),true,'A viewer-only warehouse must hide editing even in a mixed-role session.');
+            await evaluate('renderImportItems(true)');
+            assert.equal(await evaluate('importEditing'),false,'Read-only receipt details must remain read-only.');
+            await evaluate('importDialog.close()');
+            if(mixed) {
+                await evaluate('openImport(JSON.parse(importRows.find(row=>JSON.parse(row.dataset.import).can_edit===true).dataset.import))');
+                assert.equal(await evaluate('document.getElementById("import-edit").hidden'),false,'The same account must edit receipts in its keeper warehouse.');
+                await evaluate('importDialog.close()');
+            }
+        } else if(route==='decisions') {
+            assert.equal(await evaluate('document.getElementById("create-decision")===null'),true);
+            await evaluate('document.querySelector(".edit-decision").click()');
+            assert.equal(await evaluate('decisionForm.elements.number.readOnly && decisionForm.elements.content.readOnly && decisionForm.elements.pdf.disabled'),true,'Keeper decision editing must allow links while protecting metadata/PDF.');
+            await evaluate('decisionEditor.close()');
+        } else if(route==='products') assert.equal(await evaluate('document.querySelectorAll(".edit-product").length'),0);
+        else assert.equal(await evaluate('document.querySelector(".report-account-summary")===null'),true);
+        await page('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:false});
+        await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+        assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true);
+        const roleShot=await page('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+        writeFileSync(join(outputDir,`${role}-${route}${mixed?'-mixed':''}.png`),Buffer.from(roleShot.data,'base64'));
+    }
     assert.deepEqual(pageErrors, [], 'Browser errors.');
     assert.deepEqual(failedRequests, [], 'Asset loading errors.');
     assert.equal(postRequests, 0, 'Dashboard sample controls must not submit business data.');

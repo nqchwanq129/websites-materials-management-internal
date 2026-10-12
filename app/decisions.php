@@ -46,8 +46,20 @@ function saveDecision(PDO $pdo, string $actorId, array $input, array $files): st
         // Same low-volume write lock as account/employee management.
         $pdo->query('SELECT id FROM users ORDER BY id FOR UPDATE')->fetchAll();
         $actor = findUser($pdo, 'id', $actorId);
-        if (!userCanSignIn($actor) || !(int) $actor['is_super_admin']) throw new DomainException('Bạn không có quyền thực hiện thao tác này.');
+        if (!userCanSignIn($actor)) throw new DomainException('Bạn không có quyền thực hiện thao tác này.');
         $before = $id ? decisionSnapshot($pdo, $id) : null;
+        if (!(int)$actor['is_super_admin']) {
+            if (!$before || warehousePermission($pdo, $actorId, (string)$before['warehouse_id']) !== 'keeper'
+                || (string)$before['warehouse_id'] !== $warehouse || $pdf !== null) throw new DomainException('Bạn chỉ được gắn hàng hóa vào quyết định của kho được cấp quyền.');
+            foreach (['number'=>$number,'issued_date'=>$date,'decision_type'=>$type,'issuing_authority'=>$authority,'content'=>$content] as $field=>$value) {
+                if ((string)($before[$field] ?? '') !== $value) throw new DomainException('Chỉ quản trị viên được sửa thông tin ban hành hoặc PDF quyết định.');
+            }
+            foreach (['import'=>['import_bill_details','import_bill','import_bill_id'],'export'=>['export_bill_details','export_bill','export_bill_id']] as [$details,$bills,$billId]) {
+                $stmt = $pdo->prepare("SELECT d.id FROM $details d JOIN $bills b ON b.id=d.$billId WHERE d.decision_id=? AND b.warehouse_id<>? LIMIT 1");
+                $stmt->execute([$id,$warehouse]);
+                if ($stmt->fetchColumn()) throw new DomainException('Quyết định có liên kết khác kho; cần quản trị viên kiểm tra.');
+            }
+        }
         if ($id && (!$before || managementText($input, 'version', 32, true) !== $before['updated_at']
             || managementText($input, 'links_version', 64, true) !== decisionLinksVersion($before['links']))) throw new DomainException('Quyết định hoặc hàng hóa liên kết đã thay đổi. Hãy tải lại trang trước khi sửa.');
         $stmt = $pdo->prepare('SELECT status FROM warehouses WHERE id=?'); $stmt->execute([$warehouse]);
@@ -103,7 +115,7 @@ function saveDecision(PDO $pdo, string $actorId, array $input, array $files): st
     }
 }
 
-function downloadDecisionPdf(PDO $pdo, mixed $attachmentId): never
+function downloadDecisionPdf(PDO $pdo, mixed $attachmentId, string $userId): never
 {
-    serveAttachment($pdo, $attachmentId, 'decision_id');
+    serveAttachment($pdo, $attachmentId, 'decision_id', $userId);
 }

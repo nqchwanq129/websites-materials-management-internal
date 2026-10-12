@@ -32,6 +32,37 @@ function warehousePermission(PDO $pdo, string $userId, string $warehouseId): ?st
     return $statement->fetchColumn() ?: null;
 }
 
+function userAccess(PDO $pdo, string $userId): array
+{
+    $user = findUser($pdo, 'id', $userId);
+    if (!userCanSignIn($user)) throw new DomainException('Tài khoản không còn quyền truy cập.');
+    $access = ['admin'=>(int)$user['is_super_admin'] === 1, 'warehouses'=>[], 'warehouse_names'=>[]];
+    if (!$access['admin']) {
+        $stmt = $pdo->prepare("SELECT g.warehouse_id,g.role,w.name FROM user_warehouses g JOIN warehouses w ON w.id=g.warehouse_id WHERE g.user_id=? AND w.status='active'");
+        $stmt->execute([$userId]);
+        foreach ($stmt as $grant) { $access['warehouses'][(string)$grant['warehouse_id']] = $grant['role']; $access['warehouse_names'][(string)$grant['warehouse_id']] = $grant['name']; }
+    }
+    return $access;
+}
+function canViewWarehouse(?array $access, string $warehouseId): bool
+{
+    return $access === null || $access['admin'] || isset($access['warehouses'][$warehouseId]);
+}
+function canManageWarehouse(?array $access, string $warehouseId): bool
+{
+    return $access === null || $access['admin'] || ($access['warehouses'][$warehouseId] ?? null) === 'keeper';
+}
+function canAccessPage(array $access, string $page, bool $write = false): bool
+{
+    if ($access['admin'] || in_array($page, ['home','profile'], true)) return true;
+    if (in_array($page, ['accounts','employees','warehouses','audit'], true)) return false;
+    $keeper = in_array('keeper', $access['warehouses'], true);
+    if (in_array($page, ['import-create','export-create'], true)) return $keeper;
+    if ($write) return $keeper && in_array($page, ['imports','decisions'], true);
+    return (bool)$access['warehouses'] && in_array($page, ['products','materials','spare-parts','tools','fixed-assets','other-products','imports','exports','reports','suppliers','decisions',
+        'import-file','import-image','export-file','decision-file','import-excel','export-excel'], true);
+}
+
 function authenticateUser(PDO $pdo, string $username, string $password, string $address, bool $rehash = true): array
 {
     $directory = dirname(__DIR__) . '/storage/login-attempts';

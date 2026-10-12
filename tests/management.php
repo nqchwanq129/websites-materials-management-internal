@@ -724,7 +724,8 @@ try {
     [, $body]=httpManagement('home'); verify(!str_contains($body,'data-receipt ') && !str_contains($body,'class="heading-actions"'),'Ordinary account without grants must see no receipts or create shortcuts.');
     $pdo->prepare('UPDATE users SET is_super_admin=1 WHERE id=?')->execute([$actorId]);
     // Report checks use this isolated database, never insert sample business data into production.
-    rejected(fn()=>loadReportData($pdo,$targetId));
+    $viewerLedger=loadReportData($pdo,$targetId);
+    verify(count($viewerLedger['warehouses'])===1 && !$viewerLedger['accounts'] && array_reduce($viewerLedger['movements'],static fn($ok,$row)=>$ok && (string)$row['warehouse_id']===$warehouseIds[0],true),'Viewer reports must contain only granted warehouses and no account statistics.');
     $pdo->prepare("INSERT INTO import_bill (warehouse_id,number,received_date,receipt_type,status,total_before_tax) VALUES (?,'REPORT-CATEGORIES','2026-10-01','opening','confirmed',24)")->execute([$warehouseIds[0]]);
     $reportBillId=$pdo->lastInsertId();
     foreach($pdo->query("SELECT id,name,unit FROM products WHERE code IN ('PAGE-materials','PAGE-spare-parts','PAGE-tools','PAGE-fixed-assets')") as $record) {
@@ -835,6 +836,88 @@ try {
     [$status,$body]=httpManagement('profile'); $unlinked=json_decode($body,true,512,JSON_THROW_ON_ERROR)['profile'];
     verify($status===200 && !$unlinked['editable'],'Unlinked admin must display profile without inventing employee data.');
     verify(httpManagement('profile',['csrf_token'=>$csrf,'action'=>'profile','version'=>$unlinked['version'],'full_name'=>'Unlinked','email'=>'','phone'=>''])[0]===422,'Unlinked accounts must not create employee records through self-service.');
+    // One account is keeper at A, viewer at B and has no grant at C.
+    $rbacWarehouses=[];$rbacBills=[];$rbacPdfs=[];
+    foreach (['A','B','C'] as $key) {
+        $pdo->prepare('INSERT INTO warehouses (code,name) VALUES (?,?)')->execute([$prefix.'-rbac-'.$key,'RBAC-WAREHOUSE-'.$key]);
+        $rbacWarehouses[$key]=$pdo->lastInsertId();
+        $rbacCreate=['csrf_token'=>$csrf,'action'=>'create','warehouse'=>$rbacWarehouses[$key],'number'=>'RBAC-IMPORT-'.$key,'received_date'=>'2026-10-12',
+            'receipt_type'=>'opening','supplier_name'=>'RBAC-SUPPLIER-'.$key,'status'=>'confirmed','image_count'=>'1','form_complete'=>'1',
+            'items'=>json_encode([['product_id'=>'','code'=>'RBAC-PRODUCT-'.$key,'name'=>'RBAC-GOODS-'.$key,'category'=>'other','unit'=>'Piece','tracking_mode'=>'quantity','quantity'=>'3','unit_price'=>'10','tax_code'=>'KCT']])];
+        $rbacPhoto=$uploads[0];$rbacPhoto['field']='images[0][]';$rbacPhoto['name']='RBAC-PHOTO-'.$key.'.png';
+        verify(httpDecisionPdf($rbacCreate,$pdf,'RBAC-PDF-'.$key.'.pdf','import-create','pdf',[$rbacPhoto])[0]===200,'Permission test receipt creation failed.');
+        $rbacBills[$key]=array_values(array_filter(loadImports($pdo),static fn($row)=>$row['number']==='RBAC-IMPORT-'.$key))[0];
+        $rbacPdfs[$key]=$rbacBills[$key]['attachments'][0]['id'];
+    }
+    $pdo->prepare('INSERT INTO users (username,password_hash,is_super_admin) VALUES (?,?,0)')->execute([$prefix.'-rbac',password_hash($password,PASSWORD_DEFAULT)]);
+    $rbacUserId=$pdo->lastInsertId();
+    foreach (['A'=>'keeper','B'=>'viewer'] as $key=>$role) $pdo->prepare('INSERT INTO user_warehouses (user_id,warehouse_id,role) VALUES (?,?,?)')->execute([$rbacUserId,$rbacWarehouses[$key],$role]);
+    $rbacDecisionInput=['csrf_token'=>$csrf,'action'=>'save','form_complete'=>'1','warehouse'=>$rbacWarehouses['A'],'number'=>'RBAC-DECISION-A','issued_date'=>'2026-10-12','decision_type'=>'increase','issuing_authority'=>'RBAC-AUTHORITY','content'=>'RBAC-CONTENT'];
+    verify(httpDecisionPdf($rbacDecisionInput,$pdf,'RBAC-DECISION-A.pdf')[0]===200,'Permission test decision creation failed.');
+    $rbacDecision=array_values(array_filter(loadManagement($pdo,'decisions')['decisions'],static fn($row)=>$row['number']==='RBAC-DECISION-A'))[0];
+    $cookie='';[, $body]=httpManagement('login');
+    verify(httpManagement('login',['username'=>$prefix.'-rbac','password'=>$password,'csrf_token'=>tokenFrom($body)])[0]===303,'Mixed-role login failed.');
+    [, $body]=httpManagement('imports');$rbacCsrf=tokenFrom($body);
+    verify(str_contains($body,'RBAC-IMPORT-A') && str_contains($body,'RBAC-IMPORT-B') && !str_contains($body,'RBAC-IMPORT-C') && !str_contains($body,'RBAC-WAREHOUSE-C'),'Receipt HTML and its JSON attributes must contain only granted warehouses.');
+    verify(!str_contains($body,'page=accounts') && !str_contains($body,'page=employees') && !str_contains($body,'page=warehouses') && !str_contains($body,'page=audit'),'Sidebar must hide admin-only functions.');
+    verify(str_contains($body,'2 kho được cấp'),'Topbar must show the actual multi-warehouse scope.');
+    foreach (['products','materials','spare-parts','tools','fixed-assets','other-products','exports','decisions','reports','suppliers'] as $route) {
+        [$status,$body]=httpManagement($route);
+        verify($status===200 && !str_contains($body,'RBAC-WAREHOUSE-C') && !str_contains($body,'RBAC-GOODS-C') && !str_contains($body,'RBAC-SUPPLIER-C'),'Read route leaked an ungranted warehouse: '.$route);
+    }
+    foreach (['accounts','employees','warehouses','audit'] as $route) verify(httpManagement($route)[0]===403,'Non-admin management page allowed: '.$route);
+    verify(httpManagement('products',['csrf_token'=>$rbacCsrf,'action'=>'save'])[0]===403,'Keeper must not edit the shared catalogue.');
+    foreach (['A','B','C'] as $key) {
+        $allowed=$key!=='C';
+        verify(httpManagement('import-excel&id='.$rbacBills[$key]['id'])[0]===($allowed?200:404),'Excel download must check receipt ownership.');
+        verify(httpManagement('import-file&id='.$rbacPdfs[$key])[0]===($allowed?200:404),'PDF download must check receipt ownership.');
+        verify(httpManagement('import-file&id='.$rbacPdfs[$key].'&preview=1')[0]===($allowed?200:404),'PDF preview must check receipt ownership.');
+        verify(httpManagement('import-image&id='.$rbacBills[$key]['items'][0]['images'][0]['id'])[0]===($allowed?200:404),'Photo viewing must check parent receipt ownership.');
+        if ($key!=='A') verify(httpManagement('imports',importEditPayload($rbacBills[$key],$rbacCsrf))[0]===422,'Keeper must not edit a viewer-only or ungranted receipt.');
+    }
+    verify(httpManagement('reports&warehouse='.$rbacWarehouses['C'])[0]===422,'Report filters must not select an ungranted warehouse.');
+    $rbacLedger=loadReportData($pdo,$rbacUserId);
+    verify(!$rbacLedger['accounts'] && !isset($rbacLedger['products'][$rbacBills['C']['items'][0]['product_id']]),'Reports must omit account statistics and foreign product metadata.');
+    $rbacLink=$rbacDecisionInput;$rbacLink['csrf_token']=$rbacCsrf;$rbacLink['id']=$rbacDecision['id'];$rbacLink['version']=$rbacDecision['version'];$rbacLink['links_version']=$rbacDecision['links_version'];
+    $rbacLink['lines']=['import'=>[$rbacBills['A']['items'][0]['id']=>$rbacBills['A']['items'][0]['updated_at']]];
+    $bad=$rbacLink;$bad['content']='Tampered by keeper';verify(httpManagement('decisions',$bad)[0]===422,'Keeper must not change decision metadata.');
+    $bad=$rbacLink;$bad['lines']=['import'=>[$rbacBills['B']['items'][0]['id']=>$rbacBills['B']['items'][0]['updated_at']]];
+    verify(httpManagement('decisions',$bad)[0]===422,'Keeper must not link a line from another warehouse.');
+    verify(httpManagement('decisions',$rbacLink)[0]===200,'Keeper must be able to link an owned receipt to an existing decision.');
+    verify(httpManagement('decision-file&id='.$rbacDecision['attachments'][0]['id'])[0]===200,'Keeper must be able to read an owned decision PDF.');
+    $rbacBills['A']=array_values(array_filter(loadImports($pdo),static fn($row)=>$row['number']==='RBAC-IMPORT-A'))[0];
+    $edit=importEditPayload($rbacBills['A'],$rbacCsrf);$editLines=json_decode($edit['items'],true);$editLines[0]['note']='Keeper own edit';$edit['items']=json_encode($editLines);
+    verify(httpManagement('imports',$edit)[0]===200,'Keeper must edit own receipt before stock is used.');
+    $rbacOwnCreate=$rbacCreate;$rbacOwnCreate['csrf_token']=$rbacCsrf;$rbacOwnCreate['warehouse']=$rbacWarehouses['A'];$rbacOwnCreate['number']='RBAC-KEEPER-NEW';$rbacOwnCreate['supplier_name']='RBAC-KEEPER-SUPPLIER';$rbacOwnCreate['image_count']='0';
+    $rbacOwnItem=['product_id'=>'','code'=>'RBAC-KEEPER-PRODUCT','name'=>'Keeper product','category'=>'other','unit'=>'Piece','tracking_mode'=>'quantity','quantity'=>'3','unit_price'=>'10','tax_code'=>'KCT'];
+    $rbacOwnCreate['items']=json_encode([$rbacOwnItem]);
+    $bad=$rbacOwnCreate;$bad['warehouse']=$rbacWarehouses['B'];verify(httpManagement('import-create',$bad)[0]===422,'Viewer warehouse must not accept keeper imports.');
+    $bad=$rbacOwnCreate;$bad['items']=json_encode([['product_id'=>$rbacBills['C']['items'][0]['product_id'],'version'=>$pdo->query('SELECT updated_at FROM products WHERE id='.$rbacBills['C']['items'][0]['product_id'])->fetchColumn(),'quantity'=>'1','unit_price'=>'1','tax_code'=>'KCT']]);
+    verify(httpManagement('import-create',$bad)[0]===422,'Forged catalogue IDs must not select a foreign product.');
+    $bad=$rbacOwnCreate;$bad['supplier_id']=(string)$rbacBills['C']['supplier_id'];verify(httpManagement('import-create',$bad)[0]===422,'Forged supplier IDs must not select a foreign supplier.');
+    verify(httpManagement('import-create',$rbacOwnCreate)[0]===200,'Keeper must create a receipt in the keeper warehouse.');
+    $rbacOwnBill=array_values(array_filter(loadImports($pdo),static fn($row)=>$row['number']==='RBAC-KEEPER-NEW'))[0];
+    $rbacLot=loadExportSources($pdo,(string)$rbacOwnBill['items'][0]['id'])[0];
+    $rbacExport=['csrf_token'=>$rbacCsrf,'action'=>'create','warehouse'=>$rbacWarehouses['A'],'number'=>'RBAC-KEEPER-EXPORT','issued_date'=>'2026-10-12','issue_type'=>'allocation','status'=>'draft','reason'=>'Keeper check','items'=>json_encode([['source_import_detail_id'=>$rbacLot['id'],'version'=>$rbacLot['version'],'quantity'=>'1']])];
+    $bad=$rbacExport;$bad['issue_type']='transfer';$bad['destination_warehouse']=$rbacWarehouses['B'];verify(httpManagement('export-create',$bad)[0]===422,'Transfers require keeper rights at the destination as well.');
+    verify(httpManagement('export-create',$rbacExport)[0]===200,'Keeper must create own export receipt.');
+    $rbacOwnCreate['number']='RBAC-KEEPER-DRAFT';$rbacOwnCreate['status']='draft';$rbacOwnCreate['items']=json_encode([['product_id'=>$rbacOwnBill['items'][0]['product_id'],'version'=>$pdo->query('SELECT updated_at FROM products WHERE id='.$rbacOwnBill['items'][0]['product_id'])->fetchColumn(),'quantity'=>'1','unit_price'=>'1','tax_code'=>'KCT']]);
+    verify(httpManagement('import-create',$rbacOwnCreate)[0]===200,'Keeper must select existing goods in the allowed catalogue.');
+    $rbacDraft=array_values(array_filter(loadImports($pdo),static fn($row)=>$row['number']==='RBAC-KEEPER-DRAFT'))[0];
+    verify(httpManagement('imports',['csrf_token'=>$rbacCsrf,'action'=>'delete','id'=>$rbacDraft['id'],'version'=>$rbacDraft['version']])[0]===200,'Keeper must delete own unreferenced draft.');
+    $rbacBills['A']=array_values(array_filter(loadImports($pdo),static fn($row)=>$row['number']==='RBAC-IMPORT-A'))[0];
+    verify(httpManagement('imports',['csrf_token'=>$rbacCsrf,'action'=>'cancel','id'=>$rbacBills['A']['id'],'version'=>$rbacBills['A']['version'],'cancel_reason'=>'Keeper cancellation'])[0]===200,'Keeper must cancel an eligible own receipt and unlink its decision.');
+    verify($pdo->query('SELECT decision_id FROM import_bill_details WHERE id='.$rbacBills['A']['items'][0]['id'])->fetchColumn()===null,'Keeper cancellation must remove the decision link.');
+    $pdo->prepare("UPDATE user_warehouses SET role='viewer' WHERE user_id=?")->execute([$rbacUserId]);
+    foreach (['import-create','export-create'] as $route) verify(httpManagement($route)[0]===403 && httpManagement($route,$rbacOwnCreate)[0]===403,'Viewer must not open or submit creation forms.');
+    verify(httpManagement('imports',$edit)[0]===403 && httpManagement('decisions',$rbacLink)[0]===403,'Viewer must not submit receipt or decision edits.');
+    [, $body]=httpManagement('imports');verify(!str_contains($body,'class="button button-danger import-state"') && !str_contains($body,'href="index.php?page=import-create"'),'Viewer UI must hide creating and deleting controls.');
+    verify(httpManagement('import-excel&id='.$rbacOwnBill['id'])[0]===200,'Viewer must retain read-only Excel access.');
+    $pdo->prepare("UPDATE warehouses SET status='inactive' WHERE id=?")->execute([$rbacWarehouses['B']]);
+    verify(httpManagement('import-file&id='.$rbacPdfs['B'])[0]===404,'Inactive warehouses must revoke file access immediately.');
+    $pdo->prepare('DELETE FROM user_warehouses WHERE user_id=?')->execute([$rbacUserId]);
+    verify(httpManagement('imports')[0]===403 && httpManagement('home')[0]===200,'An account without grants must retain only its home and personal account access.');
+    $cookie=$adminCookie;
     // Printing settings and snapshots are checked only in this isolated database.
     $pdo->prepare('INSERT INTO employees (code,full_name,warehouse_id) VALUES (?,?,?)')->execute([$prefix.'-signer','Người ký lúc lập',$warehouseIds[0]]);
     $printEmployeeId = $pdo->lastInsertId();
@@ -955,8 +1038,9 @@ try {
     $rollbackDecisionInput['version'] = $currentDecision['updated_at']; $rollbackDecisionInput['links_version'] = decisionLinksVersion($currentDecision['links']);
     $rollbackDecisionInput['number'] = 'ROLLBACK-QD';
     $rollbackDecisionInput['lines[import][' . $pendingId . ']'] = $pdo->query("SELECT updated_at FROM import_bill_details WHERE id=$pendingId")->fetchColumn();
+    $decisionFilesBefore=count(glob($testRoot . '/storage/uploads/decisions/*.pdf'));
     verify(httpDecisionPdf($rollbackDecisionInput, $pdf)[0] === 503, 'Audit failure must reject PDF save.');
-    verify(decisionSnapshot($pdo, $newDecisionId) === $currentDecision && count(glob($testRoot . '/storage/uploads/decisions/*.pdf')) === 1, 'Rollback left changed links, metadata or orphan PDF.');
+    verify(decisionSnapshot($pdo, $newDecisionId) === $currentDecision && count(glob($testRoot . '/storage/uploads/decisions/*.pdf')) === $decisionFilesBefore, 'Rollback left changed links, metadata or orphan PDF.');
     $current = managementSnapshot($pdo, 'accounts', $targetId);
     try {
         saveManagement($pdo, 'accounts', $actorId, ['action' => 'state', 'id' => $targetId, 'version' => $current['updated_at'], 'status' => 'locked']);

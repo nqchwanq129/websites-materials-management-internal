@@ -59,13 +59,16 @@ function storeAttachment(PDO $pdo, ?array $pdf, string $owner, string $id, strin
     catch (Throwable $error) { unlink($stored); throw $error; }
     return $stored;
 }
-function serveAttachment(PDO $pdo, mixed $attachmentId, string $owner, bool $preview = false): never
+function serveAttachment(PDO $pdo, mixed $attachmentId, string $owner, string $userId, bool $preview = false): never
 {
     $folder = ['decision_id' => 'decisions', 'import_bill_id' => 'imports', 'export_bill_id' => 'exports', 'import_bill_detail_id'=>'import-items'][$owner] ?? throw new InvalidArgumentException('Invalid attachment owner.');
     try { $id = managementId($attachmentId); }
     catch (DomainException $error) { http_response_code(404); exit('Không tìm thấy file.'); }
-    $stmt = $pdo->prepare("SELECT original_name,storage_path,mime_type FROM attachments WHERE id=? AND $owner IS NOT NULL");
+    $join = $owner === 'import_bill_detail_id' ? 'JOIN import_bill_details d ON d.id=a.import_bill_detail_id JOIN import_bill b ON b.id=d.import_bill_id'
+        : 'JOIN '.(['decision_id'=>'decisions','import_bill_id'=>'import_bill','export_bill_id'=>'export_bill'][$owner]).' b ON b.id=a.'.$owner;
+    $stmt = $pdo->prepare("SELECT a.original_name,a.storage_path,a.mime_type,b.warehouse_id FROM attachments a $join WHERE a.id=?");
     $stmt->execute([$id]); $file = $stmt->fetch();
+    if (!$file || !canViewWarehouse(userAccess($pdo, $userId), (string)$file['warehouse_id'])) { http_response_code(404); exit('Không tìm thấy file.'); }
     $types = $owner === 'import_bill_detail_id' ? ['image/jpeg'=>'jpg','image/png'=>'png','image/webp'=>'webp'] : ['application/pdf'=>'pdf'];
     $extension = $file ? ($types[$file['mime_type']] ?? null) : null;
     if (!$extension || !preg_match('~^' . $folder . '/[a-f0-9]{32}\.' . $extension . '$~D', $file['storage_path'])) { http_response_code(404); exit('Không tìm thấy file.'); }

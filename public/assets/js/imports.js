@@ -69,9 +69,10 @@ function openImport(bill) {
     importDialog.showModal(); importDialog.querySelector('.account-dialog-body').scrollTop=0;
 }
 function renderImportItems(editing) {
+    if (currentImport.can_edit === false) editing = false;
     importEditing=editing;importEditForm.querySelector('[data-form-error]').hidden=true;
     document.getElementById('import-dialog-title').textContent=editing?'Chỉnh sửa phiếu nhập':'Chi tiết phiếu nhập';
-    document.getElementById('import-edit').hidden=editing;
+    document.getElementById('import-edit').hidden=editing || currentImport.can_edit === false;
     document.getElementById('import-edit').disabled=currentImport.status==='cancelled' || !currentImport.items.length;
     document.getElementById('import-edit-save').hidden=!editing;
     document.getElementById('import-edit-cancel').hidden=!editing;

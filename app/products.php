@@ -16,7 +16,7 @@ function productQuantity(?string $value): string
     $decimal = rtrim($decimal, '0');
     return preg_replace('/\B(?=(\d{3})+(?!\d))/', '.', $whole) . ($decimal !== '' ? ',' . $decimal : '');
 }
-function loadProducts(PDO $pdo, string $category = ''): array
+function loadProducts(PDO $pdo, string $category = '', ?array $access = null): array
 {
     $records = [];
     $statement = $pdo->prepare('SELECT id,code,name,category,unit,tracking_mode,status,updated_at AS version FROM products WHERE (?=\'\' OR category=?) ORDER BY id DESC');
@@ -30,6 +30,7 @@ function loadProducts(PDO $pdo, string $category = ''): array
         'export' => ['export_bill_details', 'export_bill', 'export_bill_id', 'issued_date', 'issued_quantity']] as $direction => [$details, $bills, $billId, $date, $quantity]) {
         foreach ($pdo->query("SELECT d.id,d.product_id,d.product_name,d.unit,d.$quantity AS quantity,d.amount_before_tax,d.decision_status,b.number,b.$date AS date,b.status,b.warehouse_id,w.name AS warehouse_name,
             q.number AS decision_number FROM $details d JOIN $bills b ON b.id=d.$billId JOIN warehouses w ON w.id=b.warehouse_id LEFT JOIN decisions q ON q.id=d.decision_id ORDER BY b.$date DESC,d.id DESC") as $item) {
+            if ($access !== null && !canViewWarehouse($access, (string)$item['warehouse_id'])) continue;
             if (!isset($records[(string) $item['product_id']])) continue;
             $row = &$records[(string) $item['product_id']];
             $item['direction'] = $direction; $row['movements'][] = $item;
@@ -45,6 +46,7 @@ function loadProducts(PDO $pdo, string $category = ''): array
             unset($row);
         }
     }
+    if ($access !== null && !$access['admin']) $records = array_filter($records, static fn($row) => (bool)$row['movements']);
     foreach ($records as &$row) {
         usort($row['movements'], static fn($a, $b) => [$b['date'], $b['id']] <=> [$a['date'], $a['id']]);
         $row['closing'] = bcsub($row['incoming'], $row['outgoing'], 6);

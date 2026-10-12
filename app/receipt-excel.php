@@ -111,7 +111,7 @@ function buildReceiptWorkbook(string $direction, array $bill): Spreadsheet
     return $book;
 }
 
-function downloadReceiptExcel(PDO $pdo, string $direction, mixed $value): never
+function downloadReceiptExcel(PDO $pdo, string $direction, mixed $value, string $userId): never
 {
     $id = managementId($value);
     if (!in_array($direction, ['import', 'export'], true)) throw new DomainException('Loại phiếu không hợp lệ.');
@@ -122,6 +122,7 @@ function downloadReceiptExcel(PDO $pdo, string $direction, mixed $value): never
             LEFT JOIN users u ON u.id=b.created_by LEFT JOIN employees e ON e.id=u.employee_id WHERE b.id=?');
         $statement->execute([$id]);
         $bill = $statement->fetch();
+        if ($bill && !canViewWarehouse(userAccess($pdo, $userId), (string)$bill['warehouse_id'])) $bill = false;
         if ($bill) {
             // Legacy receipts have no saved printing metadata; use the current warehouse configuration.
             if ($bill['print_snapshot'] === null) $bill['print_snapshot'] = receiptPrintSnapshot($pdo, (string)$bill['warehouse_id'], (string)($bill['created_by'] ?? '0'), [], false);
