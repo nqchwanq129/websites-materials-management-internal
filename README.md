@@ -75,6 +75,10 @@ The browser check also covers account filters, forms and warehouse role selectio
 
 Account lists show at most **10 accounts per page**. Searching or changing a
 filter resets to the first page; pagination applies to the matching accounts.
+The linked-employee field is a single editable combobox: click to list employees,
+or type a code/name, including Vietnamese text without accents, to filter. Choose
+with a click or arrow keys/Enter; Escape restores the previous selection. Unmatched
+text cannot be saved as a link. Only the selected employee ID is submitted.
 
 Super admins can open **Danh mục → Nhân viên** at `public/index.php?page=employees`.
 The employee UI reads real records with code, full name, email, phone,
@@ -300,7 +304,7 @@ Install the locked PHP dependencies with `composer install --no-dev` (PhpSpreads
 
 Apply `database/2026-10-12-receipt-print-settings.sql` to MariaDB before deploying this feature. The additive, repeatable migration creates `warehouse_print_settings` (one row per warehouse) and nullable JSON-validated `print_snapshot` columns on both receipt headers. It has been applied to the local `qlvt-new` database without changing existing receipt fields or adding sample configuration.
 
-Warehouse create/edit includes **Thông tin in phiếu**: unit, department, department address, location, and employee selections for keeper, accounting supervisor and director. Blank department addresses use the warehouse address; other unconfigured fields remain blank. Any active employee can sign, including central accounting/director staff from another warehouse; these selections do not grant application permissions. Employee references prevent deletion while configured as signers; clear them before deleting. Warehouse settings share the existing admin/CSRF checks, stale-version protection, transaction and before/after audit.
+Warehouse create/edit includes **Thông tin in phiếu**: unit, department, department address, and employee selections for keeper, accounting supervisor and director. Receipt location comes directly from the warehouse address and is shown read-only in receipt previews; no separate location input is needed. Blank department addresses also use the warehouse address. The legacy location column and saved receipt snapshots remain intact; new receipts ignore legacy location settings and freeze the warehouse address at creation. Other unconfigured fields remain blank. Any active employee can sign, including central accounting/director staff from another warehouse; these selections do not grant application permissions. Employee references prevent deletion while configured as signers; clear them before deleting. Warehouse settings share the existing admin/CSRF checks, stale-version protection, transaction and before/after audit.
 
 Both receipt creation pages include a collapsed printing section with read-only department fields and optional signer overrides. Changing the warehouse resets the fields and signers to that warehouse's defaults. Stale warehouse configuration, missing/inactive signers and invalid IDs are rejected before committing the receipt. A hidden version supplied by the form checks the preview against the saved configuration. Every new receipt (including drafts and automatic transfer imports at the destination warehouse) saves department fields, warehouse and creator names, and signer names in the same transaction as its lines and audit. Subsequent warehouse/employee changes do not change Excel output for those receipts. Existing receipts with a NULL snapshot use the current warehouse configuration on download, including historical inactive signer names; exports never retain the template's sample people or address. Snapshot text is written as Excel strings, including names beginning with formula characters.
 

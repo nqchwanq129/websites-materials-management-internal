@@ -959,6 +959,7 @@ try {
     $stmt=$pdo->prepare('SELECT id FROM warehouses WHERE code=?');$stmt->execute([$printWarehouseInput['code']]);$printWarehouseId=(string)$stmt->fetchColumn();
     $printWarehouse=managementSnapshot($pdo,'warehouses',$printWarehouseId);
     verify($printWarehouse['print_settings']['unit_name']==='Đơn vị riêng','Printing settings must be included in warehouse snapshots.');
+    verify($printWarehouse['print_settings']['location']==='', 'The retired location setting must not be written from client input.');
     $printVersion=loadManagement($pdo,'import-create')['printVersions'][$printWarehouseId];
     $printUpdate=$printWarehouseInput+['id'=>$printWarehouseId,'version'=>$printWarehouse['updated_at']];
     $badPrint=$printUpdate;$badPrint['print_settings']['keeper_employee_id']='999999999';
@@ -972,6 +973,7 @@ try {
     $printBill=array_values(array_filter(loadImports($pdo),static fn($row)=>$row['number']==='PRINT-IMPORT'))[0];
     $printSnapshot=json_decode($printBill['print_snapshot'],true,16,JSON_THROW_ON_ERROR);
     verify($printSnapshot['unit_name']==='Đơn vị riêng' && $printSnapshot['keeper_name']==='Người ký lúc lập','Import must snapshot configured names and department.');
+    verify($printSnapshot['location']==='Địa chỉ kho', 'Import location must come from the warehouse address.');
     $printSource=loadExportSources($pdo,(string)$printBill['items'][0]['id'])[0];
     $printExport=['csrf_token'=>$csrf,'action'=>'create','warehouse'=>$printWarehouseId,'number'=>'PRINT-EXPORT','issued_date'=>'2026-10-12','issue_type'=>'transfer',
         'destination_warehouse'=>$warehouseIds[1],'reason'=>'Print check','status'=>'confirmed','print_version'=>$printVersion,
@@ -982,15 +984,17 @@ try {
     $printExportBill=array_values(array_filter(loadExports($pdo),static fn($row)=>$row['number']==='PRINT-EXPORT'))[0];
     $exportPrint=json_decode($printExportBill['print_snapshot'],true,16,JSON_THROW_ON_ERROR);
     verify($exportPrint['keeper_name']==='' && $exportPrint['accountant_name']==='Người ký lúc lập','Per-receipt signer overrides must not modify warehouse defaults.');
+    verify($exportPrint['location']==='Địa chỉ kho', 'Export location must come from the warehouse address.');
     $transferPrintBill=array_values(array_filter(loadImports($pdo),static fn($row)=>$row['id']===(string)$printExportBill['transfers'][0]['id']))[0];
     $transferPrint=json_decode($transferPrintBill['print_snapshot'],true,16,JSON_THROW_ON_ERROR);
     verify($transferPrint['warehouse_name']===$pdo->query('SELECT name FROM warehouses WHERE id='.$warehouseIds[1])->fetchColumn() && $transferPrint['unit_name']==='', 'Automatic transfer imports must snapshot the destination warehouse configuration.');
+    verify($transferPrint['location']===($pdo->query('SELECT address FROM warehouses WHERE id='.$warehouseIds[1])->fetchColumn() ?? ''), 'Transfer location must use the destination warehouse address.');
     $printUpdate['print_settings']['unit_name']='Đơn vị mới';
     verify(httpManagement('warehouses',$printUpdate)[0]===200 && httpManagement('warehouses',$printUpdate)[0]===422,'A printing-only edit must invalidate stale warehouse forms.');
     $printImport['number']='STALE-PRINT';
     verify(httpManagement('import-create',$printImport)[0]===422,'Receipt forms must reject a warehouse configuration changed after the preview.');
     $pdo->prepare('UPDATE employees SET full_name=? WHERE id=?')->execute(['Tên mới của người ký',$printEmployeeId]);
-    $pdo->prepare('UPDATE warehouses SET name=? WHERE id=?')->execute(['Tên mới của kho',$printWarehouseId]);
+    $pdo->prepare('UPDATE warehouses SET name=?,address=? WHERE id=?')->execute(['Tên mới của kho','Địa chỉ kho mới',$printWarehouseId]);
     foreach (['import'=>$printBill,'export'=>$printExportBill] as $direction=>$receipt) {
         [$printStatus,$printBytes]=httpManagement($direction.'-excel&id='.$receipt['id']);
         verify($printStatus===200,'Saved receipt export must remain available after configuration/name changes.');
@@ -999,6 +1003,7 @@ try {
             file_put_contents($printFile,$printBytes);$printBook=\PhpOffice\PhpSpreadsheet\IOFactory::load($printFile);$printSheet=$printBook->getActiveSheet();
             $signatureRow=($direction==='import'?9:10)+count($receipt['items'])+13;
             verify(str_contains($printSheet->getCell('A1')->getValue(),'Đơn vị riêng') && str_ends_with($printSheet->getCell('A6')->getValue(),'Kho in lúc lập'),'Old printed metadata must survive changes to the warehouse.');
+            verify($printSheet->getCell('F6')->getValue()==='Địa điểm: Địa chỉ kho', 'Saved receipt addresses must survive later warehouse address changes.');
             verify($printSheet->getCell('F'.$signatureRow)->getValue()==='Người ký lúc lập','Old signer names must survive employee renames.');
             $printBook->disconnectWorksheets();
         } finally { unlink($printFile); }

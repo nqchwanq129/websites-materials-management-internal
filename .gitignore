@@ -10,6 +10,7 @@
 # Dependencies and generated files.
 /vendor/
 /storage/login-attempts/
+/storage/migrations/
 /storage/uploads/*
 !/storage/uploads/.gitkeep
 *.log

@@ -5,7 +5,10 @@ if (receiptPrintDetails) {
     const validateSigner = select => select.setCustomValidity(select.selectedOptions[0]?.dataset.active === 'false' ? 'Người ký đã ngừng hoạt động. Hãy chọn nhân viên khác hoặc để trống.' : '');
     const updatePrintFields = () => {
         const id = form.elements.warehouse.value, config = settings[id] || {}, warehouse = warehouses[id] || {};
-        receiptPrintDetails.querySelectorAll('[data-print-value]').forEach(input => { input.value = config[input.dataset.printValue] || (input.dataset.printValue === 'department_address' ? warehouse.address || '' : ''); });
+        receiptPrintDetails.querySelectorAll('[data-print-value]').forEach(input => {
+            input.value = input.dataset.printValue === 'location' ? warehouse.address || ''
+                : config[input.dataset.printValue] || (input.dataset.printValue === 'department_address' ? warehouse.address || '' : '');
+        });
         receiptPrintDetails.querySelectorAll('[data-print-signer]').forEach(select => {
             select.value = config[select.dataset.printSigner] || ''; validateSigner(select);
         });

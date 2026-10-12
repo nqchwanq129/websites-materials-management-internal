@@ -42,6 +42,97 @@ const accountDialog = document.getElementById('account-dialog');
 const accountForm = document.getElementById('account-form');
 const adminCheckbox = document.getElementById('account-admin');
 const passwordInput = document.getElementById('account-password');
+const accountEmployeeSelect = document.getElementById('account-employee');
+const accountEmployeeSearch = document.getElementById('account-employee-search');
+const accountEmployeePanel = document.getElementById('account-employee-panel');
+const accountEmployeeOptions = [...accountEmployeePanel.querySelectorAll('[data-employee-choice]')];
+const accountEmployeeEntries = accountEmployeeOptions.map(option => ({ option, text: normalize(option.textContent) }));
+let chosenAccountEmployee = '', activeAccountEmployee = null;
+function closeAccountEmployees() {
+    if (accountEmployeePanel.matches(':popover-open')) accountEmployeePanel.hidePopover();
+    accountEmployeeSearch.setAttribute('aria-expanded', 'false');
+    accountEmployeeSearch.removeAttribute('aria-activedescendant');
+    activeAccountEmployee?.removeAttribute('data-active');
+    activeAccountEmployee = null;
+}
+function chooseAccountEmployee(id = '') {
+    const option = accountEmployeeOptions.find(option => option.dataset.employeeChoice === id);
+    chosenAccountEmployee = option?.dataset.employeeChoice || '';
+    accountEmployeeSelect.value = chosenAccountEmployee;
+    accountEmployeeSearch.value = chosenAccountEmployee ? option.textContent : '';
+    accountEmployeeSearch.setCustomValidity('');
+    accountEmployeeOptions.forEach(option => option.setAttribute('aria-selected', String(option.dataset.employeeChoice === chosenAccountEmployee)));
+    closeAccountEmployees();
+}
+function positionAccountEmployees() {
+    const rect = accountEmployeeSearch.getBoundingClientRect();
+    const body = accountDialog.querySelector('.account-dialog-body').getBoundingClientRect();
+    if (rect.bottom <= body.top || rect.top >= body.bottom) { closeAccountEmployees(); return; }
+    const below = innerHeight - rect.bottom - 12, above = rect.top - 12;
+    const upward = below < 160 && above > below;
+    const height = Math.min(240, upward ? above : below);
+    Object.assign(accountEmployeePanel.style, { left: `${rect.left}px`, width: `${rect.width}px`, maxHeight: `${Math.max(48, height)}px`,
+        top: upward ? 'auto' : `${rect.bottom + 6}px`, bottom: upward ? `${innerHeight - rect.top + 6}px` : 'auto' });
+}
+function openAccountEmployees(query = '') {
+    const words = normalize(query.trim()).split(/\s+/);
+    accountEmployeeEntries.forEach(({ option, text }) => { option.hidden = Boolean(option.dataset.employeeChoice) && !words.every(word => text.includes(word)); });
+    document.getElementById('account-employee-hint').hidden = accountEmployeeOptions.some(option => option.dataset.employeeChoice && !option.hidden);
+    activeAccountEmployee?.removeAttribute('data-active');
+    activeAccountEmployee = null;
+    accountEmployeeSearch.removeAttribute('aria-activedescendant');
+    if (!accountEmployeePanel.matches(':popover-open')) accountEmployeePanel.showPopover();
+    accountEmployeeSearch.setAttribute('aria-expanded', 'true');
+    positionAccountEmployees();
+}
+accountEmployeeSearch.addEventListener('focus', () => { accountEmployeeSearch.select(); openAccountEmployees(); });
+accountEmployeeSearch.addEventListener('click', () => openAccountEmployees());
+accountEmployeeSearch.addEventListener('input', () => {
+    const choice = accountEmployeeOptions.find(option => option.dataset.employeeChoice === chosenAccountEmployee);
+    const selected = chosenAccountEmployee && accountEmployeeSearch.value === choice?.textContent;
+    accountEmployeeSelect.value = selected ? chosenAccountEmployee : '';
+    accountEmployeeSearch.setCustomValidity(accountEmployeeSearch.value.trim() && !selected ? 'Hãy chọn một nhân viên trong danh sách.' : '');
+    openAccountEmployees(accountEmployeeSearch.value);
+});
+accountEmployeePanel.addEventListener('mousedown', event => event.preventDefault());
+accountEmployeePanel.addEventListener('click', event => {
+    const option = event.target.closest('[data-employee-choice]');
+    if (option) chooseAccountEmployee(option.dataset.employeeChoice);
+});
+const accountEmployeeToggle = document.getElementById('account-employee-toggle');
+accountEmployeeToggle.addEventListener('mousedown', event => event.preventDefault());
+accountEmployeeToggle.addEventListener('click', () => {
+    if (accountEmployeePanel.matches(':popover-open')) closeAccountEmployees();
+    else { accountEmployeeSearch.focus(); openAccountEmployees(); }
+});
+accountEmployeeSearch.addEventListener('keydown', event => {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        if (!accountEmployeePanel.matches(':popover-open')) openAccountEmployees();
+        const options = accountEmployeeOptions.filter(option => !option.hidden);
+        const index = options.indexOf(activeAccountEmployee);
+        const next = event.key === 'ArrowDown' ? Math.min(index + 1, options.length - 1) : (index < 0 ? options.length - 1 : Math.max(0, index - 1));
+        activeAccountEmployee?.removeAttribute('data-active');
+        activeAccountEmployee = options[next];
+        activeAccountEmployee.setAttribute('data-active', '');
+        accountEmployeeSearch.setAttribute('aria-activedescendant', activeAccountEmployee.id);
+        activeAccountEmployee.scrollIntoView({ block: 'nearest' });
+    } else if (event.key === 'Enter' && accountEmployeePanel.matches(':popover-open')) {
+        event.preventDefault();
+        const option = activeAccountEmployee || accountEmployeeOptions.find(option => !option.hidden
+            && (accountEmployeeSelect.value ? option.dataset.employeeChoice === accountEmployeeSelect.value
+                : accountEmployeeSearch.value.trim() && option.dataset.employeeChoice));
+        if (option) chooseAccountEmployee(option.dataset.employeeChoice);
+    } else if (event.key === 'Escape' && accountEmployeePanel.matches(':popover-open')) {
+        event.preventDefault(); event.stopPropagation(); chooseAccountEmployee(chosenAccountEmployee);
+    } else if (event.key === 'Tab') closeAccountEmployees();
+});
+document.addEventListener('pointerdown', event => { if (!event.target.closest('.account-employee-field')) closeAccountEmployees(); });
+document.addEventListener('focusin', event => { if (!event.target.closest('.account-employee-field')) closeAccountEmployees(); });
+accountDialog.querySelector('.account-dialog-body').addEventListener('scroll', () => {
+    if (accountEmployeePanel.matches(':popover-open')) positionAccountEmployees();
+});
+window.addEventListener('resize', closeAccountEmployees);
 function updateGlobalAccess() {
     document.getElementById('warehouse-permissions').disabled = adminCheckbox.checked;
     document.getElementById('global-access-note').hidden = !adminCheckbox.checked;
@@ -53,7 +144,7 @@ function openAccount(account = null) {
     document.getElementById('account-version').value = account?.version || '';
     document.getElementById('account-dialog-title').textContent = account ? 'Chỉnh sửa tài khoản' : 'Thêm tài khoản';
     document.getElementById('account-username').value = account?.username || '';
-    document.getElementById('account-employee').value = account?.employee || '';
+    chooseAccountEmployee(account?.employee || '');
     document.getElementById('edit-account-status').value = account?.status || 'active';
     adminCheckbox.checked = account?.admin || false;
     passwordInput.disabled = accountForm.dataset.preview === 'true' && Boolean(account);
@@ -63,6 +154,7 @@ function openAccount(account = null) {
     document.querySelectorAll('[data-warehouse-role]').forEach(select => { select.value = account?.warehouses[select.dataset.warehouseRole] || ''; });
     updateGlobalAccess();
     accountDialog.showModal();
+    accountDialog.querySelector('.account-dialog-body').scrollTop = 0;
 }
 document.getElementById('create-account').addEventListener('click', () => openAccount());
 document.querySelectorAll('.edit-account').forEach(button => button.addEventListener('click', () => openAccount(JSON.parse(button.closest('[data-account]').dataset.account))));
@@ -72,7 +164,7 @@ accountForm.addEventListener('submit', event => {
     event.preventDefault();
     submitManagementForm(accountForm, accountDialog, 'account-notice');
 });
-accountDialog.addEventListener('close', () => { passwordInput.value = ''; });
+accountDialog.addEventListener('close', () => { passwordInput.value = ''; closeAccountEmployees(); });
 const stateDialog = document.getElementById('account-state-dialog');
 const accountStateForm = document.getElementById('account-state-form');
 accountStateForm.querySelector('[data-close-state]').addEventListener('click', () => stateDialog.close());

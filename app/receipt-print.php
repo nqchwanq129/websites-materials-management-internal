@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 function receiptPrintTextFields(): array
 {
-    return ['unit_name'=>200, 'department_name'=>200, 'department_address'=>500, 'location'=>500];
+    return ['unit_name'=>200, 'department_name'=>200, 'department_address'=>500];
 }
 function receiptPrintSigners(): array
 {
@@ -39,8 +39,8 @@ function saveWarehousePrintSettings(PDO $pdo, string $warehouseId, array $input)
         $id = managementId($input[$role.'_employee_id'] ?? '', true);
         receiptSignerName($pdo, $id); $values[] = $id;
     }
-    $pdo->prepare('INSERT INTO warehouse_print_settings (warehouse_id,unit_name,department_name,department_address,location,keeper_employee_id,accountant_employee_id,director_employee_id)
-        VALUES (?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE unit_name=VALUES(unit_name),department_name=VALUES(department_name),department_address=VALUES(department_address),location=VALUES(location),
+    $pdo->prepare('INSERT INTO warehouse_print_settings (warehouse_id,unit_name,department_name,department_address,keeper_employee_id,accountant_employee_id,director_employee_id)
+        VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE unit_name=VALUES(unit_name),department_name=VALUES(department_name),department_address=VALUES(department_address),
         keeper_employee_id=VALUES(keeper_employee_id),accountant_employee_id=VALUES(accountant_employee_id),director_employee_id=VALUES(director_employee_id)')
         ->execute([$warehouseId,...$values]);
 }
@@ -57,6 +57,7 @@ function receiptPrintSnapshot(PDO $pdo, string $warehouseId, string $actorId, ar
     if (!is_array($signers)) throw new DomainException('Thông tin người ký không hợp lệ.');
     $snapshot = array_intersect_key($settings, receiptPrintTextFields());
     $snapshot['department_address'] = $snapshot['department_address'] ?: ($warehouse['address'] ?? '');
+    $snapshot['location'] = $warehouse['address'] ?? '';
     $snapshot['warehouse_name'] = $warehouse['name'];
     $stmt = $pdo->prepare('SELECT COALESCE(e.full_name,u.username) FROM users u LEFT JOIN employees e ON e.id=u.employee_id WHERE u.id=?');
     $stmt->execute([$actorId]); $snapshot['creator_name'] = $stmt->fetchColumn() ?: '';
