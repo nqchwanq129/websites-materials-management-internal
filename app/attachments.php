@@ -46,22 +46,69 @@ function receiveImportImages(array $files, array $input, int $lineCount): array
         || ($count && ($input['form_complete'] ?? null) !== '1')) throw new DomainException('Không nhận đủ ảnh của phiếu. Hãy giảm số ảnh hoặc tải lại trang.');
     return $images;
 }
+function attachmentFolder(string $owner): string
+{
+    return ['decision_id'=>'decisions','import_bill_id'=>'imports','export_bill_id'=>'exports','import_bill_detail_id'=>'import-items'][$owner]
+        ?? throw new InvalidArgumentException('Invalid attachment owner.');
+}
+function attachmentStorageName(PDO $pdo, string $owner, string $ownerId, string $attachmentId, string $extension): string
+{
+    attachmentFolder($owner);
+    $ownerId = managementId($ownerId); $attachmentId = managementId($attachmentId);
+    $photo = $owner === 'import_bill_detail_id';
+    if (!in_array($extension, $photo ? ['jpg','png','webp'] : ['pdf'], true)) throw new InvalidArgumentException('Invalid attachment extension.');
+    if ($photo) $sql = 'SELECT b.id,b.number,b.warehouse_id,b.received_date AS date FROM import_bill_details d JOIN import_bill b ON b.id=d.import_bill_id WHERE d.id=?';
+    else {
+        [$table,$date] = ['decision_id'=>['decisions','issued_date'],'import_bill_id'=>['import_bill','received_date'],'export_bill_id'=>['export_bill','issued_date']][$owner];
+        $sql = "SELECT id,number,warehouse_id,$date AS date FROM $table WHERE id=?";
+    }
+    $stmt = $pdo->prepare($sql); $stmt->execute([$ownerId]); $document = $stmt->fetch();
+    if (!$document) throw new DomainException('Không tìm thấy hồ sơ để lưu tệp đính kèm.');
+    $number = mb_strtoupper($document['number'], 'UTF-8');
+    // Windows iconv transliteration drops some Vietnamese letters; fold them explicitly.
+    foreach (['A'=>'ÀÁẠẢÃÂẦẤẬẨẪĂẰẮẶẲẴ','E'=>'ÈÉẸẺẼÊỀẾỆỂỄ','I'=>'ÌÍỊỈĨ','O'=>'ÒÓỌỎÕÔỒỐỘỔỖƠỜỚỢỞỠ',
+        'U'=>'ÙÚỤỦŨƯỪỨỰỬỮ','Y'=>'ỲÝỴỶỸ','D'=>'Đ'] as $letter=>$accents) $number = preg_replace('/['.$accents.']/u',$letter,$number);
+    $number = trim(substr(preg_replace('/[^A-Z0-9-]+/','-',$number),0,48),'-') ?: 'KHONG-SO';
+    $prefix = ['decision_id'=>'QD','import_bill_id'=>'PN','export_bill_id'=>'PX','import_bill_detail_id'=>'ANH'][$owner];
+    $label = $photo ? 'PN' : ($owner === 'decision_id' ? 'QD' : 'PHIEU');
+    return $prefix.'_KHO'.$document['warehouse_id'].'_'.$label.$document['id'].'_'.$number
+        .($photo ? '_DONG'.$ownerId : '').'_'.str_replace('-','',$document['date']).'_TEP'.$attachmentId.'.'.$extension;
+}
+function validAttachmentStoragePath(array $file, string $owner): bool
+{
+    $photo = $owner === 'import_bill_detail_id';
+    $types = $photo ? ['image/jpeg'=>'jpg','image/png'=>'png','image/webp'=>'webp'] : ['application/pdf'=>'pdf'];
+    $extension = $types[$file['mime_type']] ?? null;
+    if ($extension === null || !is_string($file['storage_path'] ?? null)) return false;
+    $id = '[1-9][0-9]{0,19}';
+    $prefix = ['decision_id'=>'QD_KHO'.$id.'_QD'.$id,'import_bill_id'=>'PN_KHO'.$id.'_PHIEU'.$id,
+        'export_bill_id'=>'PX_KHO'.$id.'_PHIEU'.$id,'import_bill_detail_id'=>'ANH_KHO'.$id.'_PN'.$id][$owner] ?? throw new InvalidArgumentException('Invalid attachment owner.');
+    $structured = $prefix.'_[A-Za-z0-9-]{1,48}'.($photo ? '_DONG'.$id : '').'_[0-9]{8}_TEP'.$id;
+    return preg_match('~^'.attachmentFolder($owner).'/(?:[a-f0-9]{32}|'.$structured.')\\.'.$extension.'$~D',$file['storage_path']) === 1;
+}
 function storeAttachment(PDO $pdo, ?array $pdf, string $owner, string $id, string $actor): ?string
 {
     if ($pdf === null) return null;
-    $folder = ['decision_id' => 'decisions', 'import_bill_id' => 'imports', 'export_bill_id' => 'exports', 'import_bill_detail_id'=>'import-items'][$owner] ?? throw new InvalidArgumentException('Invalid attachment owner.');
+    if (!$pdo->inTransaction()) throw new LogicException('Attachments must be stored inside the document transaction.');
+    $folder = attachmentFolder($owner);
     $directory = dirname(__DIR__) . '/storage/uploads/' . $folder;
     if (!is_dir($directory) && !mkdir($directory, 0770, true) && !is_dir($directory)) throw new RuntimeException('Cannot create upload directory.');
-    $relative = $folder . '/' . bin2hex(random_bytes(16)) . '.' . $pdf['extension'];
+    $pdo->prepare("INSERT INTO attachments (original_name,storage_path,mime_type,$owner,created_by) VALUES (?,'',?,?,?)")->execute([$pdf['name'], $pdf['mime_type'], $id, $actor]);
+    $attachmentId = $pdo->lastInsertId();
+    $relative = $folder . '/' . attachmentStorageName($pdo, $owner, $id, $attachmentId, $pdf['extension']);
     $stored = dirname(__DIR__) . '/storage/uploads/' . $relative;
-    if (!move_uploaded_file($pdf['tmp_name'], $stored)) throw new RuntimeException('Cannot store PDF.');
-    try { $pdo->prepare("INSERT INTO attachments (original_name,storage_path,mime_type,$owner,created_by) VALUES (?,?,?,?,?)")->execute([$pdf['name'], $relative, $pdf['mime_type'], $id, $actor]); }
-    catch (Throwable $error) { unlink($stored); throw $error; }
+    $reservation = @fopen($stored, 'x');
+    if ($reservation === false) throw new RuntimeException('Cannot reserve attachment path; existing files must not be overwritten.');
+    fclose($reservation);
+    try {
+        if (!move_uploaded_file($pdf['tmp_name'], $stored)) throw new RuntimeException('Cannot store attachment.');
+        $pdo->prepare('UPDATE attachments SET storage_path=? WHERE id=?')->execute([$relative,$attachmentId]);
+    } catch (Throwable $error) { if (is_file($stored)) unlink($stored); throw $error; }
     return $stored;
 }
 function serveAttachment(PDO $pdo, mixed $attachmentId, string $owner, string $userId, bool $preview = false): never
 {
-    $folder = ['decision_id' => 'decisions', 'import_bill_id' => 'imports', 'export_bill_id' => 'exports', 'import_bill_detail_id'=>'import-items'][$owner] ?? throw new InvalidArgumentException('Invalid attachment owner.');
+    attachmentFolder($owner);
     try { $id = managementId($attachmentId); }
     catch (DomainException $error) { http_response_code(404); exit('Không tìm thấy file.'); }
     $join = $owner === 'import_bill_detail_id' ? 'JOIN import_bill_details d ON d.id=a.import_bill_detail_id JOIN import_bill b ON b.id=d.import_bill_id'
@@ -71,9 +118,11 @@ function serveAttachment(PDO $pdo, mixed $attachmentId, string $owner, string $u
     if (!$file || !canViewWarehouse(userAccess($pdo, $userId), (string)$file['warehouse_id'])) { http_response_code(404); exit('Không tìm thấy file.'); }
     $types = $owner === 'import_bill_detail_id' ? ['image/jpeg'=>'jpg','image/png'=>'png','image/webp'=>'webp'] : ['application/pdf'=>'pdf'];
     $extension = $file ? ($types[$file['mime_type']] ?? null) : null;
-    if (!$extension || !preg_match('~^' . $folder . '/[a-f0-9]{32}\.' . $extension . '$~D', $file['storage_path'])) { http_response_code(404); exit('Không tìm thấy file.'); }
-    $path = dirname(__DIR__) . '/storage/uploads/' . $file['storage_path'];
-    if (!is_file($path) || !is_readable($path)) { http_response_code(404); exit('Không tìm thấy file.'); }
+    if (!$extension || !validAttachmentStoragePath($file, $owner)) { http_response_code(404); exit('Không tìm thấy file.'); }
+    $root = realpath(dirname(__DIR__) . '/storage/uploads');
+    $path = realpath(dirname(__DIR__) . '/storage/uploads/' . $file['storage_path']);
+    if ($root === false || $path === false || !is_file($path) || !is_readable($path)
+        || !str_starts_with(str_replace('\\','/',$path),str_replace('\\','/',$root).'/')) { http_response_code(404); exit('Không tìm thấy file.'); }
     if ($preview && $extension === 'pdf') {
         session_write_close();
         $contents = file_get_contents($path);

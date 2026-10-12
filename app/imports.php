@@ -287,10 +287,8 @@ function changeImportState(PDO $pdo, string $actorId, array $input): string
         if ($action === 'delete') {
             $uploads = dirname(__DIR__) . '/storage/uploads/'; $root = realpath($uploads);
             foreach ($files as $file) {
-                $folder = $file['import_bill_id'] !== null ? 'imports' : 'import-items';
-                $types = $folder === 'imports' ? ['application/pdf'=>'pdf'] : ['image/jpeg'=>'jpg','image/png'=>'png','image/webp'=>'webp'];
-                $extension = $types[$file['mime_type']] ?? null;
-                if (!$extension || !preg_match('~^'.$folder.'/[a-f0-9]{32}\\.'.$extension.'$~D', $file['storage_path'])) throw new DomainException('Đường dẫn tệp đính kèm không hợp lệ; chưa xóa phiếu.');
+                $owner = $file['import_bill_id'] !== null ? 'import_bill_id' : 'import_bill_detail_id';
+                if (!validAttachmentStoragePath($file, $owner)) throw new DomainException('Đường dẫn tệp đính kèm không hợp lệ; chưa xóa phiếu.');
                 $path = realpath($uploads . $file['storage_path']);
                 if ($path === false) continue; // A missing upload does not prevent removing its metadata.
                 if ($root === false || !is_file($path) || !str_starts_with(str_replace('\\','/',$path), str_replace('\\','/',$root).'/')) throw new DomainException('Tệp đính kèm nằm ngoài thư mục lưu trữ; chưa xóa phiếu.');

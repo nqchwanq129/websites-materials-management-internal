@@ -163,7 +163,7 @@ and is not part of the project history.
 
 Decision list: `index.php?page=decisions` reads real database records within the account's warehouse scope, with search, type/warehouse/link filters and 10 rows per page. Details show linked import and export lines; quantities retain DECIMAL precision. Only the list remains in the Decisions sidebar group. Create/edit decisions and select existing receipt lines in the same dialog. New links require confirmed receipts, a matching active warehouse, and pending lines without another decision. Removing a selection returns that line to pending. Concurrent decision/line changes reject stale forms; changes and attachments are audited atomically.
 
-Decision PDF attachments use the existing `attachments` table (`decision_id`, `original_name`, `storage_path`, `mime_type`, `created_by`); no schema change is needed. Upload one PDF per save (maximum 2 MiB), with server-side extension, MIME and signature validation. Files are appended to existing attachments and stored with random names in `storage/uploads/decisions/`, outside the public directory and excluded from Git. Download through `index.php?page=decision-file&id=...` requires an active account with access to the decision warehouse. Back up both the database and `storage/uploads/`; a source-code commit does not contain uploaded documents. Failed database/audit writes roll back metadata and remove the newly uploaded file.
+Decision PDF attachments use the existing `attachments` table (`decision_id`, `original_name`, `storage_path`, `mime_type`, `created_by`); no schema change is needed. Upload one PDF per save (maximum 2 MiB), with server-side extension, MIME and signature validation. Files are appended with structured names in `storage/uploads/decisions/`, outside the public directory and excluded from Git. Download through `index.php?page=decision-file&id=...` requires an active account with access to the decision warehouse. Back up both the database and `storage/uploads/`; a source-code commit does not contain uploaded documents. Failed database/audit writes roll back metadata and remove the newly uploaded file.
 
 ## Personal account
 
@@ -257,7 +257,24 @@ Checks: `php tests/home.php --exports`, `php tests/home.php --export-create`, `p
 
 Each row in **Tạo phiếu nhập** has an optional **Thêm ảnh** control. Multiple selections accumulate, previews can be enlarged or removed, and removing/replacing a row releases its image previews. XML replacement asks for confirmation before discarding selected photos. File groups are indexed from the final row order at submission, including when rows are removed or the same product appears twice.
 
-The existing `attachments.import_bill_detail_id` foreign key and single-owner constraint link each photo to its exact new receipt line; no schema change is required. Files have random names in private `storage/uploads/import-items/`. Receipt, metadata, PDFs, images and audit writes commit together; errors roll back database writes and remove new files. Photos are optional for both drafts and confirmed receipts.
+The existing `attachments.import_bill_detail_id` foreign key and single-owner constraint link each photo to its exact new receipt line; no schema change is required. Files have structured names in private `storage/uploads/import-items/`. Receipt, metadata, PDFs, images and audit writes commit together; errors roll back database writes and remove new files. Photos are optional for both drafts and confirmed receipts.
+
+### Attachment storage names
+
+New PDFs and photos identify their warehouse, document, business number/date and attachment ID:
+
+| Kind | Example basename |
+| --- | --- |
+| Import PDF | `PN_KHO3_PHIEU1_PN-20261012-F8F86E_20261012_TEP1.pdf` |
+| Export PDF | `PX_KHO3_PHIEU2_PX-001_20261012_TEP2.pdf` |
+| Decision PDF | `QD_KHO3_QD1_DFGV1213_20261012_TEP3.pdf` |
+| Import-line photo | `ANH_KHO3_PN1_PN-001_DONG5_20261012_TEP4.png` |
+
+Numbers are uppercased, Vietnamese accents folded, punctuation replaced with hyphens and the number component capped at 48 ASCII characters. Stable database IDs make otherwise identical names distinct. The date is the saved document date. Later changes to a document number do not rename previous uploads. The original uploaded name remains in `original_name` and is still used for the download name and PDF/image captions.
+
+`storeAttachment()` requires the existing document transaction, allocates the attachment ID and reserves the destination exclusively before moving the upload; an occupied filename is rejected without overwriting. `validAttachmentStoragePath()` is shared by downloads and draft deletion and accepts both structured paths and legacy 32-hex names. Resolved file paths must stay inside upload storage. No database columns or dependency are added. The existing local PDF `ea5714fd7e4904a32a2171312b6eb152.pdf` has been renamed to the import example above with its DB path and before/after audit updated; contents were compared with SHA-256, and ownership/original name were retained.
+
+Checks in `php tests/management.php` cover all upload types, punctuation/Unicode, repeated original names, occupied filenames, rollback without empty metadata or lost files, legacy viewing/deletion and the existing scoped downloads/previews.
 
 JPG/PNG/WebP uploads are verified by file extension, server MIME, image dimensions and actual GD decoding. Limits: 5 MiB per image, five per row, sixteen per receipt, 32 MiB total and 20 million pixels per image. Upload counts and the completion marker reject truncated or incorrectly indexed requests. These totals fit this XAMPP's existing 40 MiB POST/20-file limits together with the optional PDF.
 

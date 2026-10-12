@@ -325,6 +325,7 @@ try {
     verify(httpDecisionPdf($decisionInput, $pdf)[0] === 200, 'PDF upload failed.');
     $file = $pdo->query("SELECT * FROM attachments WHERE decision_id=$newDecisionId")->fetch();
     verify($file && is_file($testRoot . '/storage/uploads/' . $file['storage_path']), 'PDF or metadata missing.');
+    verify(str_starts_with($file['storage_path'],'decisions/QD_KHO'.$warehouseIds[0].'_QD'.$newDecisionId.'_') && str_ends_with($file['storage_path'],'_TEP'.$file['id'].'.pdf'), 'Decision PDFs must identify their warehouse, decision and attachment IDs.');
     [$status, $download, $headers] = httpManagement('decision-file&id=' . $file['id']);
     verify($status === 200 && $download === $pdf && str_contains(implode(' ', $headers), 'Content-Disposition: attachment'), 'PDF download failed.');
     $savedCookie = $cookie; $cookie = '';
@@ -555,6 +556,11 @@ try {
     $bad=$deleteState;$bad['version']=str_repeat('a',64);verify(httpManagement('imports',$bad)[0]===422,'Stale deletion must fail.');
     $bad=$deleteState;$bad['action']='cancel';$bad['cancel_reason']='Wrong state';verify(httpManagement('imports',$bad)[0]===422,'Drafts must use delete rather than cancellation.');
     $stmt=$pdo->prepare('SELECT * FROM attachments WHERE import_bill_id=? OR import_bill_detail_id IN (SELECT id FROM import_bill_details WHERE import_bill_id=?)');$stmt->execute([$deleteBill['id'],$deleteBill['id']]);$deleteFiles=$stmt->fetchAll();
+    // Legacy random filenames remain readable and deletable alongside new names.
+    $legacyFile=$deleteFiles[0];$legacyPath=dirname($legacyFile['storage_path']).'/'.md5('legacy-'.$legacyFile['id']).'.'.pathinfo($legacyFile['storage_path'],PATHINFO_EXTENSION);
+    verify(rename($testRoot.'/storage/uploads/'.$legacyFile['storage_path'],$testRoot.'/storage/uploads/'.$legacyPath),'Legacy fixture rename failed.');
+    $pdo->prepare('UPDATE attachments SET storage_path=? WHERE id=?')->execute([$legacyPath,$legacyFile['id']]);$deleteFiles[0]['storage_path']=$legacyPath;
+    verify(httpManagement(($legacyFile['mime_type']==='application/pdf'?'import-file':'import-image').'&id='.$legacyFile['id'])[0]===200,'Legacy attachments must remain downloadable.');
     $badPathFile=$deleteFiles[0];$pdo->prepare('UPDATE attachments SET storage_path=? WHERE id=?')->execute(['../.env',$badPathFile['id']]);
     verify(httpManagement('imports',$deleteState)[0]===422 && is_file($testRoot.'/.env'),'Draft deletion must reject forged attachment paths without touching files.');
     $pdo->prepare('UPDATE attachments SET storage_path=? WHERE id=?')->execute([$badPathFile['storage_path'],$badPathFile['id']]);
@@ -836,7 +842,32 @@ try {
     [$status,$body]=httpManagement('profile'); $unlinked=json_decode($body,true,512,JSON_THROW_ON_ERROR)['profile'];
     verify($status===200 && !$unlinked['editable'],'Unlinked admin must display profile without inventing employee data.');
     verify(httpManagement('profile',['csrf_token'=>$csrf,'action'=>'profile','version'=>$unlinked['version'],'full_name'=>'Unlinked','email'=>'','phone'=>''])[0]===422,'Unlinked accounts must not create employee records through self-service.');
+    $namedDecision=['csrf_token'=>$csrf,'action'=>'save','form_complete'=>'1','warehouse'=>$warehouseIds[0],'number'=>'QĐ 12/2026:../ Hà Nội',
+        'issued_date'=>'2026-10-12','decision_type'=>'increase','issuing_authority'=>'Filename check'];
+    verify(httpDecisionPdf($namedDecision,$pdf,'Đính kèm.pdf')[0]===200,'Structured filename upload with punctuation/Unicode failed.');
+    $stmt=$pdo->prepare('SELECT id FROM decisions WHERE number=?');$stmt->execute([$namedDecision['number']]);$namedDecisionId=(string)$stmt->fetchColumn();
+    $namedFile=$pdo->query('SELECT * FROM attachments WHERE decision_id='.$namedDecisionId)->fetch();
+    $namedPrefix='decisions/QD_KHO'.$warehouseIds[0].'_QD'.$namedDecisionId.'_QD-12-2026-HA-NOI_20261012_TEP';
+    verify($namedFile['storage_path']===$namedPrefix.$namedFile['id'].'.pdf' && $namedFile['original_name']==='Đính kèm.pdf','Storage names must be readable ASCII while original names remain intact.');
+    $namedBefore=decisionSnapshot($pdo,$namedDecisionId);$namedDecision['id']=$namedDecisionId;$namedDecision['version']=$namedBefore['updated_at'];$namedDecision['links_version']=decisionLinksVersion($namedBefore['links']);
+    $nextAttachmentId=(string)$pdo->query("SHOW TABLE STATUS LIKE 'attachments'")->fetch()['Auto_increment'];
+    $collision=$testRoot.'/storage/uploads/'.$namedPrefix.$nextAttachmentId.'.pdf';
+    file_put_contents($collision,'Keep existing bytes');
+    verify(httpDecisionPdf($namedDecision,$pdf,'Đính kèm.pdf')[0]===503,'An occupied storage filename must reject upload instead of overwriting.');
+    verify(file_get_contents($collision)==='Keep existing bytes' && decisionSnapshot($pdo,$namedDecisionId)===$namedBefore && (int)$pdo->query("SELECT COUNT(*) FROM attachments WHERE storage_path=''")->fetchColumn()===0,'Collision failure must preserve the file and roll back metadata/header changes.');
+    unlink($collision);
+    verify(httpDecisionPdf($namedDecision,$pdf,'Đính kèm.pdf')[0]===200,'A repeated original filename must upload successfully with a different attachment ID.');
+    $namedFiles=$pdo->query('SELECT * FROM attachments WHERE decision_id='.$namedDecisionId.' ORDER BY id')->fetchAll();
+    verify(count($namedFiles)===2 && $namedFiles[0]['storage_path']!==$namedFiles[1]['storage_path'] && file_get_contents($testRoot.'/storage/uploads/'.$namedFiles[0]['storage_path'])===$pdf,'Repeated uploads must not replace earlier files.');
+    foreach($namedFiles as $namedFile) verify(httpManagement('decision-file&id='.$namedFile['id'])[1]===$pdf,'Every structured decision filename must remain downloadable.');
     // One account is keeper at A, viewer at B and has no grant at C.
+    foreach ($pdo->query('SELECT * FROM attachments') as $attachment) {
+        $owner=null;foreach(['import_bill_id','export_bill_id','import_bill_detail_id','decision_id'] as $field) if($attachment[$field]!==null) $owner=$field;
+        verify(validAttachmentStoragePath($attachment,$owner),'Every uploaded PDF/photo must have a valid structured storage path.');
+        verify(str_ends_with(pathinfo($attachment['storage_path'],PATHINFO_FILENAME),'_TEP'.$attachment['id']),'Attachment IDs must distinguish repeated uploads without random names.');
+        $wrongPath=$attachment;$wrongPath['storage_path']=dirname($attachment['storage_path']).'/../'.basename($attachment['storage_path']);
+        verify(!validAttachmentStoragePath($wrongPath,$owner),'Structured names must not relax traversal protection.');
+    }
     $rbacWarehouses=[];$rbacBills=[];$rbacPdfs=[];
     foreach (['A','B','C'] as $key) {
         $pdo->prepare('INSERT INTO warehouses (code,name) VALUES (?,?)')->execute([$prefix.'-rbac-'.$key,'RBAC-WAREHOUSE-'.$key]);
