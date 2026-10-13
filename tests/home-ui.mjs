@@ -92,7 +92,10 @@ try {
     }
     assert.equal(await evaluate('typeof filterReceipts'), 'function', 'Dashboard script failed to load.');
     assert.equal(await evaluate('document.querySelector(".topbar-warehouse").textContent'),'Toàn hệ thống');
-    assert.equal(await evaluate('getComputedStyle(document.querySelector(".topbar-warehouse")).backgroundColor'),'rgb(243, 238, 251)','Warehouse badge must receive the current dashboard CSS.');
+    assert.equal(await evaluate('getComputedStyle(document.querySelector(".topbar-warehouse")).backgroundColor'),'rgb(246, 247, 248)','Warehouse badge must use the neutral dashboard palette.');
+    assert.equal(await evaluate('getComputedStyle(document.body).color'),'rgb(28, 28, 28)','Main text must use the black palette.');
+    assert.equal(await evaluate('getComputedStyle(document.querySelector(".metric-value")).color'),'rgb(28, 28, 28)','Metric values must use black rather than decorative colors.');
+    assert.equal(await evaluate('getComputedStyle(document.querySelector("th")).color'),'rgb(28, 28, 28)','Table headings must use black for legibility.');
     assert.equal(await evaluate('getComputedStyle(document.getElementById("user-menu-toggle")).display'),'flex','Avatar button must receive the current dashboard CSS.');
     assert.equal(await evaluate('getComputedStyle(document.getElementById("user-menu")).position'),'fixed','Account menu must receive the current dashboard CSS.');
     assert.equal(await evaluate('document.querySelector(".topbar-warehouse .icon use").getAttribute("href")'),'#i-shield');
@@ -117,11 +120,15 @@ try {
     for (let i = 0; i < 20 && await evaluate('document.getElementById("feature-dialog").open'); i++) await new Promise(resolve => setTimeout(resolve, 50));
     assert.equal(await evaluate('document.getElementById("feature-dialog").open'), false);
     const originalGroups = await evaluate('[...document.querySelectorAll(".nav-group")].map(group=>group.open)');
-    assert.equal(originalGroups[0], true);
-    await evaluate('document.querySelector(".nav-group summary").click()');
-    assert.equal(await evaluate('document.querySelector(".nav-group").open'), false, 'Second click should collapse the group.');
-    await evaluate('document.querySelector(".nav-group summary").click()');
-    assert.equal(await evaluate('document.querySelector(".nav-group").open'), true, 'Click should expand the group.');
+    assert.deepEqual(await evaluate('[...document.querySelectorAll(".nav-group summary>span:first-of-type")].slice(0,3).map(item=>item.textContent)'), ['Nhập hàng hóa','Xuất hàng hóa','Danh Sách Hàng Hóa']);
+    assert.deepEqual(await evaluate('[...document.querySelector(".nav-group").querySelectorAll(".nav-child")].map(item=>item.textContent)'), ['Nhập hóa đơn','DS phiếu nhập kho']);
+    assert.equal(await evaluate('document.querySelector("main>.breadcrumb strong").textContent'), 'Trang chủ');
+    assert.equal(await evaluate('document.querySelector(".topbar .breadcrumb")'), null);
+    assert.equal(originalGroups[2], true);
+    await evaluate('document.querySelector(".nav-group:has(a[href=\\"index.php?page=products\\"]) summary").click()');
+    assert.equal(await evaluate('document.querySelector(".nav-group:has(a[href=\\"index.php?page=products\\"])").open'), false, 'Second click should collapse the group.');
+    await evaluate('document.querySelector(".nav-group:has(a[href=\\"index.php?page=products\\"]) summary").click()');
+    assert.equal(await evaluate('document.querySelector(".nav-group:has(a[href=\\"index.php?page=products\\"])").open'), true, 'Click should expand the group.');
     await evaluate('document.getElementById("navigation-search").value="tai san"; document.getElementById("navigation-search").dispatchEvent(new Event("input"))');
     assert.equal(await evaluate('document.querySelectorAll(".nav-group:not([hidden])").length'), 2, 'Find matching child functions without Vietnamese accents.');
     assert.equal(await evaluate('[...document.querySelectorAll(".nav-group:not([hidden])")].every(group=>group.open)'), true, 'Search must reveal matching children.');
@@ -133,10 +140,37 @@ try {
     await page('Input.dispatchKeyEvent', { type: 'keyUp', key: '/', code: 'Slash', modifiers: 2, windowsVirtualKeyCode: 191 });
     assert.equal(await evaluate('document.activeElement.id'), 'navigation-search', 'Ctrl+/ must focus sidebar search.');
     assert.equal(await evaluate('document.querySelector(".workspace")'), null, 'Remove the old workspace block.');
+    await evaluate(`const originalSearchFetch=window.fetch;const searchRequests=[];window.fetch=async(url,options={})=>{
+        const params=new URL(url,document.baseURI).searchParams;if(params.get('page')!=='search')return originalSearchFetch(url,options);
+        searchRequests.push(params.get('q'));const older=params.get('offset_page')==='1',empty=params.get('q')==='missing';
+        return new Response(JSON.stringify({ok:true,items:empty?[]:[{id:older?'12':'1',type:'imports',label:'Phiếu nhập kho',title:older?'PN-OLDER':'PN-<script> kiểm tra',description:'Kho Hà Nội',href:'index.php?page=imports&id='+(older?'12':'1')},
+            ...(!older&&!empty?[{id:'1',type:'employees',label:'Nhân viên',title:'Đỗ Công Biên',description:'XLTHHN-001',href:'index.php?page=employees&id=1'}, {id:'99',type:'products',label:'Hàng hóa',title:'Unsafe URL',description:'',href:'javascript:alert(1)'}]:[])],next_page:older||empty?null:1}),{headers:{'Content-Type':'application/json'}});
+    };
+    globalSearchInput.value='PN';globalSearchForm.requestSubmit();`);
+    for(let i=0;i<100 && !await evaluate('globalSearchItems.length');i++)await new Promise(resolve=>setTimeout(resolve,30));
+    assert.equal(await evaluate('globalSearchResults.querySelectorAll("a").length'),2,'Search must group data results and reject unsafe links.');
+    assert.equal(await evaluate('globalSearchResults.querySelector("strong").textContent'),'PN-<script> kiểm tra');
+    assert.equal(await evaluate('globalSearchResults.querySelector("script")'),null,'Search titles must render as text.');
+    await evaluate('globalSearchMore.click()');
+    for(let i=0;i<100 && !await evaluate('globalSearchMore.hidden');i++)await new Promise(resolve=>setTimeout(resolve,30));
+    assert.equal(await evaluate('globalSearchResults.querySelectorAll("a").length'),3,'Show more must append older matches.');
+    await evaluate('globalSearchInput.value="missing";globalSearchForm.requestSubmit()');
+    for(let i=0;i<100 && !await evaluate('globalSearchStatus.textContent.includes("Không tìm thấy")');i++)await new Promise(resolve=>setTimeout(resolve,30));
+    assert.equal(await evaluate('globalSearchItems.length'),0,'An empty search must clear old matches.');
+    await evaluate('searchRequests.length=0;globalSearchInput.value="P";globalSearchInput.dispatchEvent(new Event("input"));globalSearchInput.value="PN";globalSearchInput.dispatchEvent(new Event("input"))');
+    await new Promise(resolve=>setTimeout(resolve,400));
+    assert.deepEqual(await evaluate('searchRequests'),['PN'],'Typing must debounce requests.');
+    await evaluate('globalSearchPanel.hidePopover();window.fetch=originalSearchFetch');
     for (const [width, height] of [[1440, 1050], [1280, 800], [1280, 600], [768, 1024], [390, 844], [320, 568], [844, 390]]) {
         await page('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
         await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
         await evaluate('window.scrollTo(0,0)');
+        assert.equal(await evaluate('(()=>{scrollTo(0,500);return Math.abs(document.querySelector(".topbar").getBoundingClientRect().top)<1;})()'),true,'Topbar must stay visible while scrolling.');
+        await evaluate('scrollTo(0,0);showGlobalSearch()');
+        assert.equal(await evaluate('(()=>{const r=globalSearchPanel.getBoundingClientRect();return r.left>=0 && r.right<=innerWidth && r.bottom<=innerHeight && r.top>=globalSearchForm.getBoundingClientRect().bottom;})()'),true,'Search results must fit under the search box at every viewport.');
+        const searchShot=await page('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+        writeFileSync(join(outputDir,`global-search-${width}x${height}.png`),Buffer.from(searchShot.data,'base64'));
+        await evaluate('globalSearchPanel.hidePopover()');
         assert.equal(await evaluate('document.querySelector(".topbar-warehouse").getClientRects().length>0'),true,'Warehouse name must remain visible on small screens.');
         assert.equal(await evaluate(`(()=>{const label=document.querySelector('.topbar-warehouse-text'),previous=label.textContent;label.textContent='Kho Hải Phòng với tên rất dài để kiểm tra';const fits=document.documentElement.scrollWidth<=innerWidth;label.textContent=previous;return fits;})()`),true,'Long warehouse names must not overflow the topbar.');
         assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, `Page overflow at ${width}px: ` + JSON.stringify(await evaluate('({scroll:document.documentElement.scrollWidth,client:document.documentElement.clientWidth,body:document.body.scrollWidth,inner:innerWidth,main:document.querySelector("main").getBoundingClientRect().toJSON(),table:document.querySelector(".table-scroll").getBoundingClientRect().toJSON()})')) + JSON.stringify(await evaluate('[...document.querySelectorAll("body *")].filter(e=>e.getBoundingClientRect().right>innerWidth && !e.closest(".table-scroll")).map(e=>({tag:e.tagName,cls:e.className,right:e.getBoundingClientRect().right})).slice(0,15)')));
@@ -611,7 +645,7 @@ try {
     assert.equal(await evaluate('document.getElementById("supplier-count").textContent.endsWith("/ 12 nhà cung cấp")'), true);
     await evaluate('supplierSearch.value="missing-supplier"; filterSuppliers()');
     assert.equal(await evaluate('document.querySelector(".supplier-empty").hidden'), false);
-    await evaluate('supplierSearch.value=""; filterSuppliers(); document.querySelectorAll(".supplier-details")[2].click()');
+    await evaluate('supplierSearch.value=""; filterSuppliers(); supplierRows[2].querySelector(".supplier-details").click()');
     assert.equal(await evaluate('document.getElementById("supplier-receipt-empty").hidden'), false);
     await evaluate('supplierDialog.close(); const maliciousSupplier=JSON.parse(supplierRows[0].dataset.supplier); maliciousSupplier.name="<img src=x onerror=alert(1)>"; openSupplier(maliciousSupplier)');
     assert.equal(await evaluate('document.getElementById("supplier-detail-name").querySelector("img") === null'), true, 'Supplier detail names are plain text.');
@@ -733,7 +767,8 @@ try {
             await new Promise(resolve => setTimeout(resolve, 100));
         }
         const reportFrame = await page('Page.getFrameTree');
-        await page('Page.setDocumentContent', { frameId: reportFrame.frameTree.frame.id, html: reportRender.stdout });
+        // Live-report samples have no login session; notifications are tested separately below.
+        await page('Page.setDocumentContent', { frameId: reportFrame.frameTree.frame.id, html: reportRender.stdout.replace('data-user="1" data-preview="false"', 'data-user="1" data-preview="true"') });
         for (let i = 0; i < 100; i++) {
             if (await evaluate('document.readyState === "complete" && typeof paginateReport === "function" && typeof XLSX === "object"')) break;
             await new Promise(resolve => setTimeout(resolve, 100));
@@ -930,7 +965,27 @@ try {
     assert.equal(await evaluate('importDialog.open && document.getElementById("import-detail-number").textContent==="PN-001"'),true,'Dashboard link must open the requested import.');
     await evaluate('importDialog.close()');
     assert.equal(await evaluate('document.querySelectorAll("[data-import]:not([hidden])").length'),10);
-    assert.equal(await evaluate(`document.querySelector('[data-import] .import-state').dataset.action`),'delete','Draft receipts need a delete action.');
+    await page('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
+    await evaluate('importStatus.value="draft";filterImports()');
+    const importActionSizes=await evaluate('importRows[0].querySelectorAll(".account-actions>.button").length && [...importRows[0].querySelectorAll(".account-actions>.button")].map(button=>button.getBoundingClientRect().width)');
+    assert.equal(await evaluate('importRows[0].cells[2].querySelector("button").title.includes(JSON.parse(importRows[0].dataset.import).supplier_name)'),true,'Supplier hints must contain the full stored name.');
+    await evaluate(`const importSavedText=[...importRows[0].querySelectorAll('.compact-cell .compact-truncate,td:nth-child(6)>.compact-cell')].map(element=>[element,element.textContent]);
+        const importSavedTitles=[...importRows[0].querySelectorAll('.compact-cell')].map(element=>[element,element.title]);
+        importSavedText.forEach(([element],index)=>element.textContent=index===importSavedText.length-1?'12.345.678.901.234,123456 ₫':'Nội dung rất dài để kiểm tra bảng phiếu nhập và thông tin nhà cung cấp '+ 'chi nhánh Hà Nội '.repeat(8));
+        importSavedTitles.forEach(([element])=>element.title=element.textContent.trim());`);
+    for(const [width,height] of [[1440,1000],[1280,800],[1024,800],[768,1024],[390,844],[320,568],[844,390]]) {
+        await page('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
+        await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+        assert.equal(await evaluate('(()=>{const region=document.querySelector(".compact-table-scroll");return region.scrollWidth<=region.clientWidth+1 && document.documentElement.scrollWidth<=innerWidth;})()'),true,'The import list must fit without horizontal scrolling at '+width);
+        assert.deepEqual(await evaluate('[...importRows[0].querySelectorAll(".account-actions>.button")].map(button=>button.getBoundingClientRect().width)'),importActionSizes,'Import action buttons must retain their original sizes at '+width);
+        assert.equal(await evaluate('[...importRows[0].querySelectorAll(".compact-cell")].every(button=>button.title===button.textContent.trim() && button.textContent.includes("…")===false)'),true,'Long text must remain available in hints rather than being truncated in the data.');
+        await evaluate('importRows[0].cells[2].querySelector("button").click()');
+        assert.equal(await evaluate('importDialog.open && importEditForm.elements.id.value==="1"'),true,'Tapping truncated content must open the same receipt.');
+        await evaluate('importDialog.close();document.querySelector(".compact-table-scroll").scrollIntoView({block:"start"})');
+        const listShot=await page('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});writeFileSync(join(outputDir,`import-list-${width}x${height}.png`),Buffer.from(listShot.data,'base64'));
+    }
+    await evaluate('importSavedText.forEach(([element,text])=>element.textContent=text);importSavedTitles.forEach(([element,title])=>element.title=title);importStatus.value="";filterImports()');
+    assert.equal(await evaluate(`importRows[0].querySelector('.import-state').dataset.action`),'delete','Draft receipts need a delete action.');
     assert.equal(await evaluate(`importRows[1].querySelector('.import-state').dataset.action`),'cancel','Confirmed receipts need a cancellation action.');
     assert.equal(await evaluate(`importRows[2].querySelector('.import-state')===null`),true,'Cancelled receipts must remain read-only history.');
     assert.equal(await evaluate(`importRows[3].querySelector('.import-state').disabled && importRows[3].querySelector('.import-state').title.includes('điều chuyển')`),true,'Transfer receipts must explain their blocked action.');
@@ -1376,6 +1431,48 @@ try {
         assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true);
         const roleShot=await page('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
         writeFileSync(join(outputDir,`${role}-${route}${mixed?'-mixed':''}.png`),Buffer.from(roleShot.data,'base64'));
+    }
+    for(const route of ['imports','exports','products','materials','spare-parts','tools','fixed-assets','other-products','employees','warehouses','suppliers','decisions','accounts','audit']) {
+        const linkedRender=spawnSync(php,['tests/home.php','--'+route,'--render'],{encoding:'utf8',windowsHide:true});assert.equal(linkedRender.status,0,linkedRender.stderr);
+        const linkedId={accounts:'6',audit:'1035',materials:'11',tools:'8','fixed-assets':'9','other-products':'10'}[route] || '12';
+        await page('Page.navigate',{url:(process.env.LOGIN_URL || 'http://localhost/qlvt-remake/public/')+'?id='+linkedId});
+        for(let i=0;i<100;i++){if(await evaluate('document.readyState==="complete" && Boolean(document.getElementById("login-form"))'))break;await new Promise(resolve=>setTimeout(resolve,30));}
+        const linkedFrame=await page('Page.getFrameTree');await page('Page.setDocumentContent',{frameId:linkedFrame.frameTree.frame.id,html:linkedRender.stdout});
+        for(let i=0;i<100;i++){if(await evaluate('document.readyState==="complete" && Boolean(document.querySelector("dialog[open]"))'))break;await new Promise(resolve=>setTimeout(resolve,30));}
+        assert.equal(await evaluate('Boolean(document.querySelector("dialog[open]"))'),true,'A search result link must open its record: '+route);
+        if(['accounts','warehouses'].includes(route))assert.equal(await evaluate('document.querySelector("dialog[open] input[name=id]").value'),linkedId,'Editable results must target the requested record.');
+        if(route==='employees') {
+            assert.equal(await evaluate('viewedEmployee.id'),linkedId,'Employee search must open the requested read-only profile.');
+            assert.equal(await evaluate('employeeDetailsDialog.querySelectorAll("input,select,textarea").length'),0,'Employee details must display data without editable controls.');
+            for(const [width,height] of [[1440,1000],[390,844],[320,568],[844,390]]) {
+                await page('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
+                assert.equal(await evaluate('(()=>{const d=employeeDetailsDialog,b=d.querySelector(".account-dialog-body"),h=d.querySelector("header"),f=d.querySelector("footer"),before=[h.getBoundingClientRect().top,f.getBoundingClientRect().top];b.scrollTop=b.scrollHeight;return before[0]===h.getBoundingClientRect().top && before[1]===f.getBoundingClientRect().top && d.scrollWidth<=d.clientWidth && d.scrollHeight<=d.clientHeight+1;})()'),true,'Employee view must keep its heading/actions fixed.');
+                const viewShot=await page('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});writeFileSync(join(outputDir,`employee-view-${width}x${height}.png`),Buffer.from(viewShot.data,'base64'));
+            }
+            await evaluate('document.getElementById("employee-detail-edit").click()');
+            assert.equal(await evaluate('employeeDialog.open && employeeForm.elements.id.value===viewedEmployee.id'),true,'Edit from employee details must use the same employee.');
+        }
+        await evaluate('document.querySelector("dialog[open]").close()');
+        if(await evaluate('Boolean(document.querySelector(".compact-table"))')) {
+            await page('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
+            const buttonSizes=await evaluate('(()=>{const row=document.querySelector(".compact-table tbody tr:not([hidden])");return [...row.lastElementChild.querySelectorAll(".button,.icon-button")].map(button=>button.getBoundingClientRect().width);})()');
+            await evaluate(`globalThis.compactTestRow=document.querySelector('.compact-table tbody tr:not([hidden])');
+                globalThis.compactTestText=[...compactTestRow.querySelectorAll('.compact-cell')].flatMap(button=>button.children.length?[...button.querySelectorAll('strong,span,small')]:[button]).map(element=>[element,element.textContent]);
+                globalThis.compactTestTitles=[...compactTestRow.querySelectorAll('.compact-cell')].map(button=>[button,button.title]);
+                compactTestText.forEach(([element])=>element.textContent='Tên, địa chỉ và thông tin rất dài '+ 'chi nhánh Hà Nội '.repeat(12));
+                compactTestTitles.forEach(([button])=>button.title=button.textContent.trim());`);
+            for(const [width,height] of [[1440,1000],[1280,800],[1024,800],[390,844],[320,568],[844,390]]) {
+                await page('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+                assert.equal(await evaluate('(()=>{const region=document.querySelector(".compact-table-scroll");return region.scrollWidth<=region.clientWidth+1 && document.documentElement.scrollWidth<=innerWidth;})()'),true,'Long data must not cause horizontal scrolling: '+route+' '+width);
+                assert.deepEqual(await evaluate('[...compactTestRow.lastElementChild.querySelectorAll(".button,.icon-button")].map(button=>button.getBoundingClientRect().width)'),buttonSizes,'Action buttons must retain their sizes: '+route+' '+width);
+                assert.equal(await evaluate('[...compactTestRow.querySelectorAll(".compact-cell")].every(button=>button.title===button.textContent.trim())'),true,'Hints must preserve the full data: '+route);
+                await evaluate('compactTestRow.querySelector(".compact-cell").click()');
+                assert.equal(await evaluate('Boolean(document.querySelector("dialog[open]"))'),true,'Long content must open its record: '+route);
+                await evaluate('document.querySelector("dialog[open]").close();document.querySelector(".compact-table-scroll").scrollIntoView({block:"start"})');
+                const compactShot=await page('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});writeFileSync(join(outputDir,`compact-${route}-${width}x${height}.png`),Buffer.from(compactShot.data,'base64'));
+            }
+            await evaluate('compactTestText.forEach(([element,text])=>element.textContent=text);compactTestTitles.forEach(([button,title])=>button.title=title)');
+        }
     }
     const noticeSource=spawnSync(php,['tests/home.php','--render'],{encoding:'utf8',windowsHide:true});assert.equal(noticeSource.status,0);
     const noticeHtml=noticeSource.stdout.replace('data-user="1" data-preview="true"','data-user="1" data-preview="false"');

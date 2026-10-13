@@ -12,5 +12,6 @@ $accounts = [
     ['username' => 'thuha', 'employee' => 'NV004', 'admin' => false, 'status' => 'active', 'warehouses' => ['central' => 'viewer', 'danang' => 'viewer']],
     ['username' => 'thanhtung', 'employee' => 'NV005', 'admin' => false, 'status' => 'locked', 'warehouses' => ['central' => 'viewer']],
 ];
+foreach ($accounts as $index => &$account) $account['id'] = (string) ($index + 1); unset($account);
 $employeeOptions = []; foreach ($employees as $key => $name) $employeeOptions[$key] = $key . ' · ' . $name;
 $managementData = compact('warehouses', 'employees', 'employeeOptions', 'accounts');

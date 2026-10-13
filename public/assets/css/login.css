@@ -1,4 +1,4 @@
-:root{color-scheme:light;--ink:#29263b;--muted:#686477;--line:#e5e2ec;--primary:#29235c;--primary-hover:#3b327c;--accent:#f45b24;--soft:#f4f1fa;font-family:Inter,"Segoe UI",Arial,sans-serif;font-synthesis:none}
+:root{color-scheme:light;--ink:#1c1c1c;--muted:#5f636b;--line:#dfe1e6;--primary:#29235c;--primary-hover:#3b327c;--accent:#f45b24;--soft:#f6f7f8;font-family:Inter,"Segoe UI",Arial,sans-serif;font-synthesis:none}
 *{box-sizing:border-box}
 html,body{height:100%;margin:0}
 body{background:#fff;color:var(--ink);font-size:14px;-webkit-font-smoothing:antialiased}

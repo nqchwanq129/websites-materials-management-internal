@@ -191,9 +191,6 @@ importEditForm.addEventListener('submit',async event=>{
     finally{importSaving=false;}
 });
 document.querySelectorAll('.import-details').forEach(button=>button.addEventListener('click',()=>openImport(JSON.parse(button.closest('[data-import]').dataset.import))));
-const requestedImportId=new URLSearchParams(window.location.search).get('id');
-const requestedImport=importRows.find(row=>JSON.parse(row.dataset.import).id===requestedImportId);
-if(requestedImport)openImport(JSON.parse(requestedImport.dataset.import));
 const importStateDialog=document.getElementById('import-state-dialog'),importStateForm=document.getElementById('import-state-form');
 let importStateSaving=false;
 function openImportState(bill,action) {

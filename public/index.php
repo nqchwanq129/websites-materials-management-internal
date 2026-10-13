@@ -5,7 +5,7 @@ require dirname(__DIR__) . '/app/bootstrap.php';
 
 $page = is_string($_GET['page'] ?? null) ? $_GET['page'] : 'login';
 $method = $_SERVER['REQUEST_METHOD'];
-if (!in_array($page, ['login', 'home', 'profile', 'notifications', 'exports', 'export-create', 'export-file', 'export-excel', 'imports', 'import-create', 'import-file', 'import-image', 'import-excel', 'product-excel', 'products', 'materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products', 'accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'decision-file', 'reports', 'audit', 'logout'], true)) {
+if (!in_array($page, ['login', 'home', 'profile', 'search', 'notifications', 'exports', 'export-create', 'export-file', 'export-excel', 'imports', 'import-create', 'import-file', 'import-image', 'import-excel', 'product-excel', 'products', 'materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products', 'accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'decision-file', 'reports', 'audit', 'logout'], true)) {
     http_response_code(404);
     exit('Trang không tồn tại.');
 }
@@ -74,6 +74,15 @@ if (isset($_SESSION['user_id'])) {
         http_response_code(503);
         exit('Hệ thống tạm thời không khả dụng. Vui lòng thử lại sau.');
     }
+}
+if ($page === 'search') {
+    if ($user === null) respondJson(['ok'=>false,'message'=>$_SESSION['login_error'] ?? 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.'],401);
+    if ($method !== 'GET') { header('Allow: GET'); respondJson(['ok'=>false,'message'=>'Chỉ hỗ trợ tìm kiếm bằng GET.'],405); }
+    session_write_close();
+    require_once dirname(__DIR__).'/app/search.php';
+    try { respondJson(['ok'=>true]+searchRecords(connectDatabase(),(string)$user['id'],$_GET)); }
+    catch (DomainException $error) { respondJson(['ok'=>false,'message'=>$error->getMessage()],422); }
+    catch (Throwable $error) { error_log('QLVT search: '.$error->getMessage()); respondJson(['ok'=>false,'message'=>'Không thể tìm kiếm lúc này. Vui lòng thử lại.'],503); }
 }
 if ($page === 'notifications') {
     if ($user === null) respondJson(['ok'=>false,'message'=>$_SESSION['login_error'] ?? 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.'],401);

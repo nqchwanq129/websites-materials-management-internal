@@ -25,7 +25,7 @@ function filterProducts(resetPage = true) {
     const matches = productRows.filter(row => {
         row.hidden = true;
         const product = JSON.parse(row.dataset.product), balance = visibleProductBalance(product);
-        row.querySelectorAll('[data-product-quantity]').forEach(cell => { cell.textContent = formatProductQuantity(balance[cell.dataset.productQuantity], product.tracking_mode); });
+        row.querySelectorAll('[data-product-quantity]').forEach(cell => { cell.textContent = formatProductQuantity(balance[cell.dataset.productQuantity], product.tracking_mode); cell.title = cell.textContent; });
         return (!productCategory || product.category === productCategory)
             && (!productWarehouse.value || product.movements.some(item => String(item.warehouse_id) === productWarehouse.value))
             && (!productStock.value || (product.tracking_mode === 'quantity' && balance.closing == null ? 'unknown' : productStockState(balance.closing)) === productStock.value)

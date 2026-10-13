@@ -8,6 +8,7 @@ require dirname(__DIR__) . '/app/dashboard.php';
 require dirname(__DIR__) . '/app/reports.php';
 require dirname(__DIR__) . '/app/stock-book-excel.php';
 require dirname(__DIR__) . '/app/activity-notifications.php';
+require dirname(__DIR__) . '/app/search.php';
 require dirname(__DIR__) . '/app/profile.php';
 require dirname(__DIR__) . '/vendor/autoload.php';
 function verify(bool $value, string $message): void { if (!$value) throw new RuntimeException($message); }
@@ -921,6 +922,14 @@ try {
     $cookie='';[, $body]=httpManagement('login');
     verify(httpManagement('login',['username'=>$prefix.'-rbac','password'=>$password,'csrf_token'=>tokenFrom($body)])[0]===303,'Mixed-role login failed.');
     [, $body]=httpManagement('imports');$rbacCsrf=tokenFrom($body);
+    [$searchStatus,$searchBody]=httpManagement('search&q=RBAC-');
+    $search=json_decode($searchBody,true,512,JSON_THROW_ON_ERROR);
+    verify($searchStatus===200 && $search['ok'] && (bool)$search['items'],'Authenticated search must return matching data.');
+    verify(!str_contains($searchBody,'RBAC-IMPORT-C') && !str_contains($searchBody,'RBAC-GOODS-C') && !str_contains($searchBody,'RBAC-SUPPLIER-C') && !str_contains($searchBody,'RBAC-WAREHOUSE-C'),'Search must never leak a foreign warehouse through titles or descriptions.');
+    verify(!array_intersect(['accounts','employees','warehouses','audit'],array_column($search['items'],'type')),'Global search must honor admin-only page permissions.');
+    verify(count(array_filter($search['items'],static fn($row)=>$row['type']==='imports'))===2,'Both keeper and viewer warehouse receipts must be searchable.');
+    verify(httpManagement('search&q[]=invalid')[0]===422 && httpManagement('search&q=test&offset_page=-1')[0]===422,'Search must validate query types and pagination.');
+    verify(httpManagement('search',['q'=>'test'])[0]===405,'Search must be read-only.');
     verify(str_contains($body,'RBAC-IMPORT-A') && str_contains($body,'RBAC-IMPORT-B') && !str_contains($body,'RBAC-IMPORT-C') && !str_contains($body,'RBAC-WAREHOUSE-C'),'Receipt HTML and its JSON attributes must contain only granted warehouses.');
     verify(!str_contains($body,'page=accounts') && !str_contains($body,'page=employees') && !str_contains($body,'page=warehouses') && !str_contains($body,'page=audit'),'Sidebar must hide admin-only functions.');
     verify(str_contains($body,'2 kho được cấp'),'Topbar must show the actual multi-warehouse scope.');
@@ -992,6 +1001,18 @@ try {
     $pdo->prepare('DELETE FROM user_warehouses WHERE user_id=?')->execute([$rbacUserId]);
     verify(httpManagement('imports')[0]===403 && httpManagement('home')[0]===200,'An account without grants must retain only its home and personal account access.');
     $cookie=$adminCookie;
+    verify(httpManagement('search&q=RBAC-IMPORT-C')[0]===200 && str_contains(httpManagement('search&q=RBAC-IMPORT-C')[1],'RBAC-IMPORT-C'),'Admin search must include all warehouses.');
+    $pdo->prepare('INSERT INTO employees (code,full_name,warehouse_id) VALUES (?,?,?)')->execute(['SEARCH_%!','Đỗ Công Biên',$warehouseIds[0]]);
+    $accentSearch=searchRecords($pdo,$actorId,['q'=>'do cong bien']);
+    verify((bool)array_filter($accentSearch['items'],static fn($row)=>$row['type']==='employees' && $row['title']==='Đỗ Công Biên'),'Search must accept Vietnamese names without accents.');
+    $literalSearch=searchRecords($pdo,$actorId,['q'=>'SEARCH_%!']);
+    verify(count(array_filter($literalSearch['items'],static fn($row)=>$row['type']==='employees'))===1,'SQL wildcard characters must be searched literally.');
+    $allSearch=[];$next='0';do{$batch=searchRecords($pdo,$actorId,['q'=>'RBAC','offset_page'=>$next]);$allSearch=[...$allSearch,...$batch['items']];$next=$batch['next_page']===null?null:(string)$batch['next_page'];}while($next!==null);
+    $searchKeys=array_map(static fn($row)=>$row['type'].':'.$row['id'],$allSearch);
+    verify(count($searchKeys)===count(array_unique($searchKeys)) && count($searchKeys)>5,'Search pagination must include older matches without duplicates.');
+    verify(!str_contains(json_encode($allSearch),'password_hash') && !str_contains(json_encode($allSearch),'active_session_hash'),'Search results must never include authentication secrets.');
+    rejected(fn()=>searchRecords($pdo,$actorId,['q'=>str_repeat('a',121)]));
+    $savedCookie=$cookie;$cookie='';verify(httpManagement('search&q=RBAC')[0]===401,'Anonymous search must return no data.');$cookie=$savedCookie;
     // Printing settings and snapshots are checked only in this isolated database.
     $pdo->prepare('INSERT INTO employees (code,full_name,warehouse_id) VALUES (?,?,?)')->execute([$prefix.'-signer','Người ký lúc lập',$warehouseIds[0]]);
     $printEmployeeId = $pdo->lastInsertId();

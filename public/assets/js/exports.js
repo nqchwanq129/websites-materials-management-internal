@@ -74,6 +74,3 @@ function openExport(bill) {
     exportDialog.showModal(); exportDialog.querySelector('.account-dialog-body').scrollTop=0;
 }
 document.querySelectorAll('.export-details').forEach(button=>button.addEventListener('click',()=>openExport(JSON.parse(button.closest('[data-export]').dataset.export))));
-const requestedExportId=new URLSearchParams(window.location.search).get('id');
-const requestedExport=exportRows.find(row=>JSON.parse(row.dataset.export).id===requestedExportId);
-if(requestedExport)openExport(JSON.parse(requestedExport.dataset.export));

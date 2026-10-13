@@ -19,7 +19,7 @@ $sampleEmployees = [
 ];
 $employees = [];
 foreach ($sampleEmployees as $index => [$name, $warehouse, $status, $account]) {
-    $employees[] = ['code' => 'NV' . str_pad((string) ($index + 1), 3, '0', STR_PAD_LEFT), 'full_name' => $name,
+    $employees[] = ['id' => (string) ($index + 1), 'code' => 'NV' . str_pad((string) ($index + 1), 3, '0', STR_PAD_LEFT), 'full_name' => $name,
         'warehouse' => $warehouse, 'status' => $status, 'account' => $account,
         'email' => ($account ?: 'nhanvien' . ($index + 1)) . '@example.com', 'phone' => ''];
 }

@@ -66,6 +66,81 @@ document.addEventListener('keydown', event => {
     navigationSearch.focus();
 });
 if (/Mac|iPhone|iPad/.test(navigator.platform)) sidebar.querySelector('kbd').textContent = '⌘ + /';
+const globalSearchForm = document.getElementById('global-search-form'), globalSearchInput = document.getElementById('global-search');
+const globalSearchPanel = document.getElementById('global-search-panel'), globalSearchResults = document.getElementById('global-search-results');
+const globalSearchStatus = document.getElementById('global-search-status'), globalSearchMore = document.getElementById('global-search-more');
+let globalSearchTimer, globalSearchController, globalSearchNext = null, globalSearchItems = [];
+function positionGlobalSearch() {
+    const rect = globalSearchForm.getBoundingClientRect(), width = document.documentElement.clientWidth;
+    globalSearchPanel.style.width = Math.min(rect.width, width - 28) + 'px';
+    globalSearchPanel.style.left = Math.max(14, Math.min(rect.left, width - globalSearchPanel.offsetWidth - 14)) + 'px';
+    globalSearchPanel.style.top = rect.bottom + 8 + 'px';
+    globalSearchPanel.style.maxHeight = Math.max(0, Math.min(540, innerHeight - rect.bottom - 24)) + 'px';
+}
+function showGlobalSearch() {
+    if (!globalSearchPanel.matches(':popover-open')) globalSearchPanel.showPopover();
+    positionGlobalSearch();
+}
+globalSearchPanel.addEventListener('toggle', () => globalSearchInput.setAttribute('aria-expanded', String(globalSearchPanel.matches(':popover-open'))));
+window.addEventListener('resize', () => { if (globalSearchPanel.matches(':popover-open')) positionGlobalSearch(); });
+function drawGlobalSearch() {
+    globalSearchResults.replaceChildren();
+    const groups = new Map();
+    for (const item of globalSearchItems) {
+        if (!/^index\.php\?page=(imports|exports|products|employees|warehouses|suppliers|decisions|accounts|audit)&id=[1-9][0-9]*$/.test(item.href)) continue;
+        if (!groups.has(item.type)) {
+            const group = document.createElement('section'), heading = document.createElement('h3');
+            heading.textContent = item.label; group.append(heading); groups.set(item.type, group); globalSearchResults.append(group);
+        }
+        const link = document.createElement('a'), title = document.createElement('strong'), description = document.createElement('small');
+        link.href = item.href; title.textContent = item.title; description.textContent = item.description;
+        link.append(title, description); groups.get(item.type).append(link);
+    }
+}
+async function fetchGlobalSearch(more = false) {
+    clearTimeout(globalSearchTimer); globalSearchController?.abort();
+    const query = globalSearchInput.value.trim();
+    if (!query) return;
+    if (!more) { globalSearchItems = []; globalSearchNext = null; globalSearchResults.replaceChildren(); }
+    const controller = globalSearchController = new AbortController();
+    globalSearchStatus.textContent = 'Đang tìm kiếm…'; globalSearchMore.disabled = true; showGlobalSearch();
+    try {
+        const params = new URLSearchParams({page: 'search', q: query, offset_page: String(more ? globalSearchNext : 0)});
+        const response = await fetch('index.php?' + params, {credentials: 'same-origin', headers: {Accept: 'application/json'}, signal: controller.signal});
+        if (response.status === 401) { globalSearchItems = []; globalSearchResults.replaceChildren(); window.location.replace('index.php?page=login'); return; }
+        if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('Không nhận được kết quả tìm kiếm. Vui lòng thử lại.');
+        const result = await response.json();
+        if (controller.signal.aborted || globalSearchInput.value.trim() !== query) return;
+        if (!response.ok || !result.ok) throw new Error(result.message || 'Không thể tìm kiếm lúc này.');
+        globalSearchItems.push(...result.items); globalSearchNext = result.next_page; drawGlobalSearch();
+        globalSearchStatus.textContent = globalSearchItems.length ? '' : 'Không tìm thấy dữ liệu phù hợp trong phạm vi tài khoản của bạn.';
+    } catch (error) {
+        if (!controller.signal.aborted) globalSearchStatus.textContent = error.message || 'Không thể kết nối. Vui lòng thử lại.';
+    } finally {
+        if (globalSearchController === controller) { globalSearchMore.disabled = false; globalSearchMore.hidden = globalSearchNext === null; }
+    }
+}
+globalSearchForm.addEventListener('submit', event => { event.preventDefault(); fetchGlobalSearch(); });
+globalSearchInput.addEventListener('input', () => {
+    clearTimeout(globalSearchTimer); globalSearchController?.abort();
+    globalSearchItems = []; globalSearchNext = null; globalSearchResults.replaceChildren(); globalSearchMore.hidden = true;
+    if (!globalSearchInput.value.trim()) { if (globalSearchPanel.matches(':popover-open')) globalSearchPanel.hidePopover(); return; }
+    globalSearchStatus.textContent = 'Đang tìm kiếm…'; showGlobalSearch(); globalSearchTimer = setTimeout(fetchGlobalSearch, 300);
+});
+globalSearchInput.addEventListener('focus', () => { if (globalSearchInput.value.trim()) showGlobalSearch(); });
+globalSearchMore.addEventListener('click', () => fetchGlobalSearch(true));
+document.addEventListener('DOMContentLoaded', () => {
+    const params = new URLSearchParams(location.search), id = params.get('id');
+    if (!id || !/^[1-9][0-9]*$/.test(id)) return;
+    const recordPage = document.getElementById('main-content').dataset.page;
+    const target = {imports: ['import', '.import-details'], exports: ['export', '.export-details'], products: ['product', '.product-details'],
+        employees: ['employee', '.employee-details'], warehouses: ['warehouse', '.edit-warehouse'], suppliers: ['supplier', '.supplier-details'],
+        decisions: ['decision', '.decision-details'], accounts: ['account', '.edit-account'], audit: ['audit', '.audit-details']}[['materials','spare-parts','tools','fixed-assets','other-products'].includes(recordPage) ? 'products' : recordPage];
+    if (!target) return;
+    const [record, button] = target;
+    const row = [...document.querySelectorAll('tr[data-' + record + ']')].find(item => String(JSON.parse(item.dataset[record]).id) === id);
+    row?.querySelector(button)?.click();
+});
 function filterReceipts() {
     const query = normalize(search.value.trim());
     let count = 0;

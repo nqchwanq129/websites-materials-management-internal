@@ -35,6 +35,24 @@ nextEmployeePage.addEventListener('click', () => { employeePage++; filterEmploye
 employeeSearch.addEventListener('input', filterEmployees);
 [employeeStatus, employeeWarehouse, employeeAccount].forEach(filter => filter.addEventListener('change', filterEmployees));
 filterEmployees();
+const employeeDetailsDialog = document.getElementById('employee-details-dialog');
+let viewedEmployee = null;
+function openEmployeeDetails(employee) {
+    viewedEmployee = employee;
+    document.getElementById('employee-detail-description').textContent = employee.code + ' · ' + employee.full_name;
+    for (const field of ['code', 'full_name', 'email', 'phone', 'warehouse', 'account', 'status']) {
+        const value = field === 'warehouse' ? [...employeeWarehouse.options].find(option => option.value === employee.warehouse)?.textContent
+            : field === 'status' ? (employee.status === 'active' ? 'Đang hoạt động' : 'Ngừng hoạt động') : employee[field];
+        document.getElementById('employee-detail-' + field).textContent = value || (field === 'account' ? 'Chưa liên kết tài khoản' : 'Chưa cập nhật');
+    }
+    employeeDetailsDialog.showModal();
+    employeeDetailsDialog.querySelector('.account-dialog-body').scrollTop = 0;
+}
+document.querySelectorAll('.employee-details').forEach(button => button.addEventListener('click', () => openEmployeeDetails(JSON.parse(button.closest('[data-employee]').dataset.employee))));
+document.getElementById('employee-detail-edit').addEventListener('click', () => {
+    employeeDetailsDialog.close();
+    openEmployee(viewedEmployee);
+});
 const employeeDialog = document.getElementById('employee-dialog');
 const employeeForm = document.getElementById('employee-form');
 const editEmployeeStatus = document.getElementById('edit-employee-status');
