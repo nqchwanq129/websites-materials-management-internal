@@ -5,7 +5,7 @@ require dirname(__DIR__) . '/app/bootstrap.php';
 
 $page = is_string($_GET['page'] ?? null) ? $_GET['page'] : 'login';
 $method = $_SERVER['REQUEST_METHOD'];
-if (!in_array($page, ['login', 'home', 'profile', 'exports', 'export-create', 'export-file', 'export-excel', 'imports', 'import-create', 'import-file', 'import-image', 'import-excel', 'products', 'materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products', 'accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'decision-file', 'reports', 'audit', 'logout'], true)) {
+if (!in_array($page, ['login', 'home', 'profile', 'exports', 'export-create', 'export-file', 'export-excel', 'imports', 'import-create', 'import-file', 'import-image', 'import-excel', 'product-excel', 'products', 'materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products', 'accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'decision-file', 'reports', 'audit', 'logout'], true)) {
     http_response_code(404);
     exit('Trang không tồn tại.');
 }
@@ -85,7 +85,7 @@ if ($page === 'profile') {
     } catch (DomainException $error) { respondJson(['ok'=>false,'message'=>$error->getMessage()],422); }
     catch (Throwable $error) { error_log('QLVT profile: '.$error->getMessage()); respondJson(['ok'=>false,'message'=>'Không thể cập nhật lúc này. Vui lòng tải lại trang và kiểm tra trước khi thử lại.'],503); }
 }
-if (in_array($page, ['home', 'exports', 'export-create', 'export-file', 'export-excel', 'imports', 'import-create', 'import-file', 'import-image', 'import-excel', 'products', 'materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products', 'accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'decision-file', 'reports', 'audit'], true)) {
+if (in_array($page, ['home', 'exports', 'export-create', 'export-file', 'export-excel', 'imports', 'import-create', 'import-file', 'import-image', 'import-excel', 'product-excel', 'products', 'materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products', 'accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'decision-file', 'reports', 'audit'], true)) {
     if ($user === null) {
         if ($method === 'POST' && $page !== 'home') respondJson(['ok' => false, 'message' => 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.'], 401);
         redirectTo('login');
@@ -100,9 +100,9 @@ if (in_array($page, ['home', 'exports', 'export-create', 'export-file', 'export-
     if ($page === 'home' && $method === 'POST') { header('Allow: GET'); respondJson(['ok'=>false,'message'=>'Tổng quan chỉ hỗ trợ tra cứu.'],405); }
     if ($page !== 'home' && $method === 'POST') {
         if ($page === 'reports') { header('Allow: GET'); respondJson(['ok' => false, 'message' => 'Báo cáo chỉ hỗ trợ tra cứu.'], 405); }
-        if ($page === 'exports' || ($page === 'imports' && !in_array($_POST['action'] ?? '', ['update','delete','cancel'], true))) { header('Allow: GET'); respondJson(['ok' => false, 'message' => 'Thao tác phiếu không được hỗ trợ.'], 405); }
+        if ($page === 'exports' || ($page === 'imports' && !in_array($_POST['action'] ?? '', ['update','delete','cancel','confirm'], true))) { header('Allow: GET'); respondJson(['ok' => false, 'message' => 'Thao tác phiếu không được hỗ trợ.'], 405); }
         if ($page === 'audit') { header('Allow: GET'); respondJson(['ok' => false, 'message' => 'Nhật ký chỉ được đọc.'], 405); }
-        if (in_array($page, ['decision-file', 'import-file', 'import-image', 'export-file', 'import-excel', 'export-excel'], true)) { header('Allow: GET'); respondJson(['ok' => false, 'message' => 'Chỉ hỗ trợ tải file.'], 405); }
+        if (in_array($page, ['decision-file', 'import-file', 'import-image', 'export-file', 'import-excel', 'export-excel', 'product-excel'], true)) { header('Allow: GET'); respondJson(['ok' => false, 'message' => 'Chỉ hỗ trợ tải file.'], 405); }
         if ($page === 'suppliers') { header('Allow: GET'); respondJson(['ok' => false, 'message' => 'Thông tin nhà cung cấp được cập nhật từ phiếu nhập kho.'], 405); }
         if (!validCsrfToken()) respondJson(['ok' => false, 'message' => 'Phiên xác nhận không hợp lệ. Hãy tải lại trang.'], 403);
         try {
@@ -122,6 +122,12 @@ if (in_array($page, ['home', 'exports', 'export-create', 'export-file', 'export-
             error_log('QLVT management: ' . $error->getMessage());
             respondJson(['ok' => false, 'message' => 'Không thể lưu lúc này. Dữ liệu chưa bị thay đổi. Vui lòng thử lại.'], 503);
         }
+    }
+    if ($page === 'product-excel') {
+        require_once dirname(__DIR__) . '/app/stock-book-excel.php';
+        try { downloadStockBookExcel(connectDatabase(),$_GET,(string)$user['id']); }
+        catch (DomainException $error) { http_response_code(400); exit(escapeHtml($error->getMessage())); }
+        catch (Throwable $error) { error_log('QLVT stock book Excel: '.$error->getMessage()); http_response_code(503); exit('Không thể xuất sổ Excel lúc này. Vui lòng thử lại sau.'); }
     }
     if (in_array($page, ['import-excel', 'export-excel'], true)) {
         require_once dirname(__DIR__) . '/app/receipt-excel.php';

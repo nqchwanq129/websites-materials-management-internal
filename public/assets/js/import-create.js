@@ -46,7 +46,10 @@ function configureImportLine(row,fill=false) {
         for (const key of ['code','name','unit','category','tracking_mode','version']) row.querySelector(`[data-field=${key}]`).value=data[key] || '';
     }
     for (const key of ['code','name','unit']) row.querySelector(`[data-field=${key}]`).readOnly=Boolean(product);
-    for (const key of ['category','tracking_mode']) row.querySelector(`[data-field=${key}]`).disabled=Boolean(product);
+    row.querySelector('[data-field=category]').disabled=false;
+    row.querySelector('[data-field=tracking_mode]').disabled=Boolean(product);
+    const note=row.querySelector('[data-product-note]');note.hidden=!product;
+    note.textContent=product?'Có thể đổi nhóm hàng tại đây. Khi lưu phiếu, nhóm mới sẽ cập nhật cho mặt hàng này trong danh mục và các báo cáo liên quan. Hàng dùng chung với kho ngoài quyền quản lý cần quản trị viên đổi nhóm.':'';
     const quantity=row.querySelector('[data-field=quantity]'), tracked=row.querySelector('[data-field=tracking_mode]').value==='quantity';
     quantity.required=tracked;quantity.disabled=!tracked;
     updateImportTotals();

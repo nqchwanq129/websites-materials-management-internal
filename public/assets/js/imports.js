@@ -74,6 +74,10 @@ function renderImportItems(editing) {
     document.getElementById('import-dialog-title').textContent=editing?'Chỉnh sửa phiếu nhập':'Chi tiết phiếu nhập';
     document.getElementById('import-edit').hidden=editing || currentImport.can_edit === false;
     document.getElementById('import-edit').disabled=currentImport.status==='cancelled' || !currentImport.items.length;
+    const confirm=document.getElementById('import-confirm');
+    confirm.hidden=editing || currentImport.can_edit===false || currentImport.status!=='draft';
+    confirm.disabled=!currentImport.items.length || Boolean(currentImport.remove_reason) || currentImport.receipt_type==='transfer';
+    confirm.title=currentImport.remove_reason || (!currentImport.items.length?'Phiếu chưa có dòng hàng.':'');
     document.getElementById('import-edit-save').hidden=!editing;
     document.getElementById('import-edit-cancel').hidden=!editing;
     document.getElementById('import-edit-note').hidden=!editing;
@@ -97,6 +101,12 @@ function renderImportItems(editing) {
             cell.replaceChildren(button);
         }
         if(editing)editImportRow(row,item);
+        else if(['ccdc','fixed_asset'].includes(item.category)) {
+            const serials=document.createElement('small');
+            serials.className='import-serial-list';serials.textContent=item.serial_numbers?.length
+                ? item.serial_numbers.map((serial,index)=>`Chiếc ${index+1}: ${serial || 'Chưa có serial'}`).join('\n') : 'Serial: Chưa cập nhật';
+            row.cells[0].append(serials);
+        }
         rows.append(row);
     }
     document.getElementById('import-items-empty').hidden=currentImport.items.length!==0;
@@ -113,6 +123,12 @@ function editImportRow(row,item) {
     };
     for(const index of [0,2,3,4,5,6])row.cells[index].replaceChildren();
     field(0,'product_name','Tên hàng trên phiếu',item.product_name,locked,255);
+    if(['ccdc','fixed_asset'].includes(item.category)) {
+        const label=document.createElement('label');label.textContent='Serial từng chiếc (mỗi dòng một chiếc)';
+        const serials=document.createElement('textarea');serials.dataset.field='serial_numbers';serials.rows=3;serials.maxLength=202000;
+        serials.value=(item.serial_numbers || []).join('\n');serials.placeholder='SN-001\n\nSN-003';label.append(serials);row.cells[0].append(label);
+        const hint=document.createElement('small');hint.className='import-line-lock';hint.textContent='Giữ đúng thứ tự từng chiếc. Để dòng trống nếu chiếc đó chưa có serial.';row.cells[0].append(hint);
+    }
     if(locked){const hint=document.createElement('small');hint.className='import-line-lock';hint.textContent='Đã xuất kho / nhận điều chuyển: giữ nguyên thông tin hàng và giá trị.';row.cells[0].append(hint);}
     const quantity=field(2,'received_quantity','Số lượng',item.received_quantity,locked || item.tracking_mode==='none');
     if(item.tracking_mode==='none')quantity.placeholder='Không theo dõi';
@@ -135,7 +151,7 @@ function editImportRow(row,item) {
 }
 function importEditItems() {
     return [...document.querySelectorAll('#import-item-rows tr')].map(row=>{
-        const item={id:row.dataset.lineId};for(const input of row.querySelectorAll('[data-field]'))item[input.dataset.field]=input.value.trim();return item;
+        const item={id:row.dataset.lineId};for(const input of row.querySelectorAll('[data-field]'))item[input.dataset.field]=input.dataset.field==='serial_numbers'?input.value:input.value.trim();return item;
     });
 }
 function importDecimalInput(value) {return (value/1000000n).toString()+'.'+(value%1000000n).toString().padStart(6,'0');}
@@ -181,23 +197,25 @@ if(requestedImport)openImport(JSON.parse(requestedImport.dataset.import));
 const importStateDialog=document.getElementById('import-state-dialog'),importStateForm=document.getElementById('import-state-form');
 let importStateSaving=false;
 function openImportState(bill,action) {
-    if(importStateSaving || !['delete','cancel'].includes(action))return;
+    if(importStateSaving || !['delete','cancel','confirm'].includes(action))return;
     importStateForm.reset();importStateForm.elements.action.value=action;importStateForm.elements.id.value=bill.id;importStateForm.elements.version.value=bill.version || '';
     importStateForm.querySelector('[data-form-error]').hidden=true;
-    const deleting=action==='delete';
-    document.getElementById('import-state-title').textContent=deleting?'Xóa phiếu nháp':'Hủy phiếu nhập';
+    const deleting=action==='delete',confirming=action==='confirm';
+    document.getElementById('import-state-title').textContent=confirming?'Xác nhận nhập kho':deleting?'Xóa phiếu nháp':'Hủy phiếu nhập';
     document.getElementById('import-state-description').textContent=bill.number+' · '+bill.warehouse_name;
     document.getElementById('import-state-number').textContent=bill.number;
     document.getElementById('import-state-warehouse').textContent=bill.warehouse_name;
     document.getElementById('import-state-date').textContent=bill.received_date.split('-').reverse().join('/');
     document.getElementById('import-state-items').textContent=bill.items.length+' dòng hàng';
-    document.getElementById('import-state-warning').textContent=deleting?'Phiếu nháp, các dòng hàng và ảnh/PDF đính kèm sẽ được xóa. Nhật ký vẫn được giữ lại. Thao tác này không thể hoàn tác.':'Phiếu sẽ không còn tính vào tồn kho và các dòng hàng sẽ tự gỡ khỏi quyết định liên kết. Hồ sơ phiếu và ảnh/PDF vẫn được giữ; liên kết cũ được lưu trong nhật ký.';
-    document.getElementById('import-cancel-reason-label').hidden=deleting;
-    importStateForm.elements.cancel_reason.required=!deleting;importStateForm.elements.cancel_reason.disabled=deleting;
-    document.getElementById('import-state-submit').textContent=deleting?'Xóa phiếu nháp':'Xác nhận hủy';
+    document.getElementById('import-state-warning').textContent=confirming?'Phiếu sẽ chuyển từ Nháp sang Đã xác nhận. Hàng hóa được tính vào tồn kho và có thể dùng để lập phiếu xuất. Hãy kiểm tra số lượng, đơn vị và tổng tiền trước khi xác nhận.':deleting?'Phiếu nháp, các dòng hàng và ảnh/PDF đính kèm sẽ được xóa. Nhật ký vẫn được giữ lại. Thao tác này không thể hoàn tác.':'Phiếu sẽ không còn tính vào tồn kho và các dòng hàng sẽ tự gỡ khỏi quyết định liên kết. Hồ sơ phiếu và ảnh/PDF vẫn được giữ; liên kết cũ được lưu trong nhật ký.';
+    document.getElementById('import-cancel-reason-label').hidden=action!=='cancel';
+    importStateForm.elements.cancel_reason.required=action==='cancel';importStateForm.elements.cancel_reason.disabled=action!=='cancel';
+    const submit=document.getElementById('import-state-submit');submit.textContent=confirming?'Xác nhận nhập kho':deleting?'Xóa phiếu nháp':'Xác nhận hủy';
+    submit.classList.toggle('button-danger',!confirming);submit.classList.toggle('button-primary',confirming);
     importStateDialog.showModal();importStateDialog.querySelector('.account-dialog-body').scrollTop=0;
 }
 document.querySelectorAll('.import-state').forEach(button=>button.addEventListener('click',()=>openImportState(JSON.parse(button.closest('[data-import]').dataset.import),button.dataset.action)));
+document.getElementById('import-confirm').addEventListener('click',()=>openImportState(currentImport,'confirm'));
 importStateDialog.querySelectorAll('[data-close-import-state]').forEach(button=>button.addEventListener('click',()=>{if(!importStateSaving)importStateDialog.close();}));
 importStateDialog.addEventListener('cancel',event=>{if(importStateSaving)event.preventDefault();});
 importStateForm.addEventListener('submit',async event=>{

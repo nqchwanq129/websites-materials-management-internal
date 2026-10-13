@@ -60,7 +60,7 @@ function canAccessPage(array $access, string $page, bool $write = false): bool
     if (in_array($page, ['import-create','export-create'], true)) return $keeper;
     if ($write) return $keeper && in_array($page, ['imports','decisions'], true);
     return (bool)$access['warehouses'] && in_array($page, ['products','materials','spare-parts','tools','fixed-assets','other-products','imports','exports','reports','suppliers','decisions',
-        'import-file','import-image','export-file','decision-file','import-excel','export-excel'], true);
+        'import-file','import-image','export-file','decision-file','import-excel','export-excel','product-excel'], true);
 }
 
 function authenticateUser(PDO $pdo, string $username, string $password, string $address, bool $rehash = true): array

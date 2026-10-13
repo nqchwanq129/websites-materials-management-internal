@@ -82,3 +82,19 @@ function editProduct(product) {
 document.querySelectorAll('.edit-product').forEach(button => button.addEventListener('click', () => editProduct(JSON.parse(button.closest('[data-product]').dataset.product))));
 productForm.querySelectorAll('[data-close-product]').forEach(button => button.addEventListener('click', () => productEditor.close()));
 productForm.addEventListener('submit', event => { event.preventDefault(); submitManagementForm(productForm, productEditor, 'product-notice'); });
+const productExportForm = document.getElementById('product-export-form');
+if (productExportForm) {
+    const dialog = document.getElementById('product-export-dialog');
+    const validateMonths = () => productExportForm.elements.to_month.setCustomValidity(
+        productExportForm.elements.from_month.value > productExportForm.elements.to_month.value ? 'Tháng kết thúc phải sau hoặc bằng tháng bắt đầu.' : '');
+    document.getElementById('product-export-open').addEventListener('click', () => {
+        const options = [...productExportForm.elements.warehouse.options].filter(option=>option.value);
+        productExportForm.elements.warehouse.value = productWarehouse.value || (options.length===1?options[0].value:'');
+        validateMonths(); dialog.showModal(); dialog.querySelector('.account-dialog-body').scrollTop=0;
+    });
+    productExportForm.querySelectorAll('[data-close-product-export]').forEach(button=>button.addEventListener('click',()=>dialog.close()));
+    for (const name of ['from_month','to_month']) productExportForm.elements[name].addEventListener('input',validateMonths);
+    productExportForm.addEventListener('submit',event=>{
+        if (productExportForm.dataset.preview==='true') { event.preventDefault(); showNotification('Bản xem trước. Xuất Excel dùng dữ liệu thật tại trang danh mục hàng hóa.','info'); }
+    });
+}

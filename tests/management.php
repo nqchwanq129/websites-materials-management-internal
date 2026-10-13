@@ -6,6 +6,7 @@ require dirname(__DIR__) . '/app/auth.php';
 require dirname(__DIR__) . '/app/management.php';
 require dirname(__DIR__) . '/app/dashboard.php';
 require dirname(__DIR__) . '/app/reports.php';
+require dirname(__DIR__) . '/app/stock-book-excel.php';
 require dirname(__DIR__) . '/app/profile.php';
 require dirname(__DIR__) . '/vendor/autoload.php';
 function verify(bool $value, string $message): void { if (!$value) throw new RuntimeException($message); }
@@ -933,13 +934,24 @@ try {
     $bad=$rbacExport;$bad['issue_type']='transfer';$bad['destination_warehouse']=$rbacWarehouses['B'];verify(httpManagement('export-create',$bad)[0]===422,'Transfers require keeper rights at the destination as well.');
     verify(httpManagement('export-create',$rbacExport)[0]===200,'Keeper must create own export receipt.');
     $rbacOwnCreate['number']='RBAC-KEEPER-DRAFT';$rbacOwnCreate['status']='draft';$rbacOwnCreate['items']=json_encode([['product_id'=>$rbacOwnBill['items'][0]['product_id'],'version'=>$pdo->query('SELECT updated_at FROM products WHERE id='.$rbacOwnBill['items'][0]['product_id'])->fetchColumn(),'quantity'=>'1','unit_price'=>'1','tax_code'=>'KCT']]);
+    $categoryLines=json_decode($rbacOwnCreate['items'],true);$categoryLines[0]['category']='consumable';$rbacOwnCreate['items']=json_encode($categoryLines);
+    $pdo->prepare('INSERT INTO import_bill_details (import_bill_id,product_id,received_quantity,product_name,unit) VALUES (?,?,1,?,?)')->execute([$rbacBills['B']['id'],$rbacOwnBill['items'][0]['product_id'],'Shared product','Piece']);$sharedCategoryLine=$pdo->lastInsertId();
+    verify(httpManagement('import-create',$rbacOwnCreate)[0]===422,'Keeper category changes must reject products shared with a viewer or foreign warehouse.');
+    $pdo->prepare('DELETE FROM import_bill_details WHERE id=?')->execute([$sharedCategoryLine]);
     verify(httpManagement('import-create',$rbacOwnCreate)[0]===200,'Keeper must select existing goods in the allowed catalogue.');
+    verify($pdo->query('SELECT category FROM products WHERE id='.$rbacOwnBill['items'][0]['product_id'])->fetchColumn()==='consumable','Keeper must be able to reclassify goods managed entirely within their keeper scope.');
     $rbacDraft=array_values(array_filter(loadImports($pdo),static fn($row)=>$row['number']==='RBAC-KEEPER-DRAFT'))[0];
     verify(httpManagement('imports',['csrf_token'=>$rbacCsrf,'action'=>'delete','id'=>$rbacDraft['id'],'version'=>$rbacDraft['version']])[0]===200,'Keeper must delete own unreferenced draft.');
+    $rbacConfirmCreate=$rbacOwnCreate;$rbacConfirmCreate['number']='RBAC-KEEPER-CONFIRM';$categoryLines[0]['version']=$pdo->query('SELECT updated_at FROM products WHERE id='.$rbacOwnBill['items'][0]['product_id'])->fetchColumn();$rbacConfirmCreate['items']=json_encode($categoryLines);
+    verify(httpManagement('import-create',$rbacConfirmCreate)[0]===200,'Keeper confirmation fixture failed.');
+    $rbacConfirmBill=array_values(array_filter(loadImports($pdo),static fn($row)=>$row['number']==='RBAC-KEEPER-CONFIRM'))[0];
+    verify(httpManagement('imports',['csrf_token'=>$rbacCsrf,'action'=>'confirm','id'=>$rbacConfirmBill['id'],'version'=>$rbacConfirmBill['version']])[0]===200,'Keeper must confirm drafts in their own warehouse.');
+    verify(httpManagement('imports',['csrf_token'=>$rbacCsrf,'action'=>'confirm','id'=>$rbacBills['B']['id'],'version'=>$rbacBills['B']['version']])[0]===422,'Keeper must not confirm receipts in a viewer warehouse.');
     $rbacBills['A']=array_values(array_filter(loadImports($pdo),static fn($row)=>$row['number']==='RBAC-IMPORT-A'))[0];
     verify(httpManagement('imports',['csrf_token'=>$rbacCsrf,'action'=>'cancel','id'=>$rbacBills['A']['id'],'version'=>$rbacBills['A']['version'],'cancel_reason'=>'Keeper cancellation'])[0]===200,'Keeper must cancel an eligible own receipt and unlink its decision.');
     verify($pdo->query('SELECT decision_id FROM import_bill_details WHERE id='.$rbacBills['A']['items'][0]['id'])->fetchColumn()===null,'Keeper cancellation must remove the decision link.');
     $pdo->prepare("UPDATE user_warehouses SET role='viewer' WHERE user_id=?")->execute([$rbacUserId]);
+    verify(httpManagement('imports',['csrf_token'=>$rbacCsrf,'action'=>'confirm','id'=>$rbacConfirmBill['id'],'version'=>$rbacConfirmBill['version']])[0]===403,'Viewer must not submit confirmation requests.');
     foreach (['import-create','export-create'] as $route) verify(httpManagement($route)[0]===403 && httpManagement($route,$rbacOwnCreate)[0]===403,'Viewer must not open or submit creation forms.');
     verify(httpManagement('imports',$edit)[0]===403 && httpManagement('decisions',$rbacLink)[0]===403,'Viewer must not submit receipt or decision edits.');
     [, $body]=httpManagement('imports');verify(!str_contains($body,'class="button button-danger import-state"') && !str_contains($body,'href="index.php?page=import-create"'),'Viewer UI must hide creating and deleting controls.');
@@ -1010,11 +1022,138 @@ try {
     }
     $printAudit=$pdo->query("SELECT after_data FROM audit_logs WHERE entity_type='import_bill' AND entity_id=".$printBill['id']." AND action='create'")->fetchColumn();
     verify(json_decode($printAudit,true)['print_snapshot']===$printSnapshot,'Receipt creation audit must contain the saved printing metadata.');
+    // Monthly stock books use real confirmed receipts in this disposable database.
+    $bookItems=[];
+    foreach (['consumable','spare_part'] as $category) $bookItems[]=['product_id'=>'','code'=>'BOOK-'.$category,'name'=>'Book '.$category,'unit'=>'Piece',
+        'category'=>$category,'tracking_mode'=>'quantity','quantity'=>'10.123456','unit_price'=>'1','tax_code'=>'KCT'];
+    $bookCreate=['action'=>'create','warehouse'=>$printWarehouseId,'number'=>'BOOK-SEPTEMBER','received_date'=>'2026-09-30','receipt_type'=>'opening','status'=>'confirmed','items'=>json_encode($bookItems)];
+    saveManagement($pdo,'import-create',$actorId,$bookCreate);
+    $bookBill=array_values(array_filter(loadImports($pdo),static fn($bill)=>$bill['number']==='BOOK-SEPTEMBER'))[0];
+    $bookProductVersion=$pdo->prepare('SELECT updated_at FROM products WHERE id=?');
+    foreach($bookItems as $index=>&$item){$item['product_id']=(string)$bookBill['items'][$index]['product_id'];$bookProductVersion->execute([$item['product_id']]);$item['version']=$bookProductVersion->fetchColumn();$item['quantity']='5.000001';}unset($item);
+    saveManagement($pdo,'import-create',$actorId,array_replace($bookCreate,['number'=>'BOOK-OCTOBER','received_date'=>'2026-10-01','items'=>json_encode($bookItems)]));
+    $bookExportLines=[];
+    foreach($bookBill['items'] as $item){$sourceLine=loadExportSources($pdo,(string)$item['id'])[0];$bookExportLines[]=['source_import_detail_id'=>$sourceLine['id'],'version'=>$sourceLine['version'],'quantity'=>'2.000002'];}
+    saveManagement($pdo,'export-create',$actorId,['action'=>'create','warehouse'=>$printWarehouseId,'number'=>'BOOK-EXPORT','issued_date'=>'2026-10-31','issue_type'=>'allocation','reason'=>'Book check','status'=>'confirmed','items'=>json_encode($bookExportLines)]);
+    foreach($bookItems as &$item)$item['quantity']='999';unset($item);
+    saveManagement($pdo,'import-create',$actorId,array_replace($bookCreate,['number'=>'BOOK-DRAFT','received_date'=>'2026-10-02','status'=>'draft','items'=>json_encode($bookItems)]));
+    saveManagement($pdo,'import-create',$actorId,array_replace($bookCreate,['number'=>'BOOK-FUTURE','received_date'=>'2026-11-01','items'=>json_encode($bookItems)]));
+    $bookAuditCount=(int)$pdo->query('SELECT COUNT(*) FROM audit_logs')->fetchColumn();
+    foreach(['materials','spare-parts'] as $kind){
+        [$bookStatus,$bookBytes]=httpManagement('product-excel&'.http_build_query(['kind'=>$kind,'warehouse'=>$printWarehouseId,'from_month'=>'2026-10','to_month'=>'2026-10']));
+        verify($bookStatus===200 && str_starts_with($bookBytes,'PK'), 'Monthly stock-book HTTP download failed.');
+        $bookFile=tempnam(sys_get_temp_dir(),'qlvt-stock-book-check-');
+        try{
+            file_put_contents($bookFile,$bookBytes);$book=\PhpOffice\PhpSpreadsheet\IOFactory::load($bookFile);$sheet=$book->getActiveSheet();
+            foreach(['C'=>'10,123456','D'=>'5,000001','E'=>'2,000002','F'=>'13,123455'] as $column=>$expected)verify($sheet->getCell($column.'8')->getValue()===$expected,'Stock book must match the confirmed ledger and exclude draft/future receipts.');
+            verify($sheet->getCell('A2')->getValue()==='Đơn vị: Đơn vị mới' && $sheet->getCell('A3')->getValue()==='Địa chỉ: Địa chỉ kho mới','Stock book must use the selected warehouse metadata.');
+            verify($sheet->getCell('A19')->getValue()==='Tên mới của người ký','Stock book must use configured current signers.');$book->disconnectWorksheets();
+        }finally{unlink($bookFile);}
+    }
+    verify((int)$pdo->query('SELECT COUNT(*) FROM audit_logs')->fetchColumn()===$bookAuditCount,'Stock-book downloads must not write audit/business data.');
+    verify(httpManagement('product-excel&kind=products&warehouse='.$printWarehouseId)[0]===400,'Only the two supported catalogue kinds may export this template.');
+    verify(httpManagement('product-excel&kind=materials&warehouse='.$printWarehouseId.'&from_month=2026-11&to_month=2026-10')[0]===400,'Reversed periods must be rejected.');
+    verify(httpManagement('product-excel',['csrf_token'=>$csrf,'kind'=>'materials','warehouse'=>$printWarehouseId])[0]===405,'Stock-book exports must be read-only GET requests.');
+    $pdo->prepare('INSERT INTO users (username,password_hash,is_super_admin) VALUES (?,?,0)')->execute([$prefix.'-book-viewer',password_hash($password,PASSWORD_DEFAULT)]);$bookViewer=$pdo->lastInsertId();
+    $pdo->prepare("INSERT INTO user_warehouses (user_id,warehouse_id,role) VALUES (?,?,'viewer')")->execute([$bookViewer,$printWarehouseId]);
+    $cookie='';[, $bookLogin]=httpManagement('login');httpManagement('login',['csrf_token'=>tokenFrom($bookLogin),'username'=>$prefix.'-book-viewer','password'=>$password]);
+    verify(httpManagement('product-excel&kind=materials&warehouse='.$printWarehouseId)[0]===200,'Viewers must download their own warehouse stock books.');
+    verify(httpManagement('product-excel&kind=materials&warehouse='.$warehouseIds[0])[0]===400,'A forged warehouse must not expose another stock book.');
+    $pdo->prepare('DELETE FROM user_warehouses WHERE user_id=?')->execute([$bookViewer]);
+    verify(httpManagement('product-excel&kind=materials&warehouse='.$printWarehouseId)[0]===403,'Grant revocation must immediately block stock-book downloads.');
+    $cookie=$adminCookie;
+    $assetItems=[];
+    foreach(['ccdc','fixed_asset'] as $cat)$assetItems[]=['product_id'=>'','code'=>'ASSET-'.$cat,'name'=>'Asset '.$cat,'unit'=>'Cái','category'=>$cat,'tracking_mode'=>'quantity',
+        'quantity'=>$cat==='ccdc'?'3':'2','unit_price'=>'1','tax_code'=>'KCT','serial_numbers'=>$cat==='ccdc'?["CC-01","","CC-03"]:["TS-01"]];
+    saveManagement($pdo,'import-create',$actorId,['action'=>'create','warehouse'=>$printWarehouseId,'number'=>'ASSET-BOOK','received_date'=>'2026-09-30','receipt_type'=>'opening',
+        'invoice_number'=>'0000123','status'=>'confirmed','items'=>json_encode($assetItems)]);
+    $assetBill=array_values(array_filter(loadImports($pdo),static fn($r)=>$r['number']==='ASSET-BOOK'))[0];
+    $assetDecision=['action'=>'save','form_complete'=>'1','warehouse'=>$printWarehouseId,'number'=>'00012/QĐ','issued_date'=>'2026-10-13','decision_type'=>'increase','issuing_authority'=>'Test',
+        'content'=>'Asset register check','lines'=>['import'=>array_column($assetBill['items'],'updated_at','id')]];
+    saveManagement($pdo,'decisions',$actorId,$assetDecision);
+    $assetBill=array_values(array_filter(loadImports($pdo),static fn($r)=>$r['number']==='ASSET-BOOK'))[0];
+    $serialEdit=importEditPayload($assetBill,$csrf);$serialLines=json_decode($serialEdit['items'],true);
+    $serialLines[1]['serial_numbers']="\nTS-02";$serialEdit['items']=json_encode($serialLines);
+    verify(httpManagement('imports',$serialEdit)[0]===200,'Per-piece serial editing must save via the protected receipt form.');
+    $assetBill=array_values(array_filter(loadImports($pdo),static fn($r)=>$r['number']==='ASSET-BOOK'))[0];
+    verify($assetBill['items'][1]['serial_numbers']===['','TS-02'],'Blank leading serial positions must survive DB and API roundtrip.');
+    $badSerial=importEditPayload($assetBill,$csrf);$badLines=json_decode($badSerial['items'],true);$badLines[1]['serial_numbers']="DUP\ndup";$badSerial['items']=json_encode($badLines);
+    verify(httpManagement('imports',$badSerial)[0]===422,'Duplicate serials must be rejected.');
+    $assetExportLines=[];foreach($assetBill['items'] as $index=>$item){$lot=loadExportSources($pdo,$item['id'])[0];$assetExportLines[]=['source_import_detail_id'=>$lot['id'],'version'=>$lot['version'],'quantity'=>$index===0?'3':'1'];}
+    saveManagement($pdo,'export-create',$actorId,['action'=>'create','warehouse'=>$printWarehouseId,'number'=>'ASSET-DECREASE','issued_date'=>'2026-10-13','issue_type'=>'disposal',
+        'reason'=>'Asset decrease','status'=>'confirmed','items'=>json_encode($assetExportLines)]);
+    $assetExport=array_values(array_filter(loadExports($pdo),static fn($r)=>$r['number']==='ASSET-DECREASE'))[0];
+    $assetDecision['number']='00013/QĐ';$assetDecision['decision_type']='decrease';$assetDecision['lines']=['export'=>array_column($assetExport['items'],'updated_at','id')];
+    saveManagement($pdo,'decisions',$actorId,$assetDecision);
+    foreach(['tools'=>3,'fixed-assets'=>2] as $kind=>$pieces){
+        $args=['kind'=>$kind,'warehouse'=>$printWarehouseId,'from_month'=>'2026-10','to_month'=>'2026-10'];
+        $assetData=loadStockBook($pdo,$args,$actorId);verify(count($assetData['rows'])===$pieces,'One row per received piece is required, filtered by decision date rather than earlier receipt date.');
+        [$status,$bytes]=httpManagement('product-excel&'.http_build_query($args));verify($status===200 && str_starts_with($bytes,'PK'),'Asset stock-book download failed.');
+        $assetFile=tempnam(sys_get_temp_dir(),'asset-http-check-');
+        try{file_put_contents($assetFile,$bytes);$book=\PhpOffice\PhpSpreadsheet\IOFactory::load($assetFile);$sheet=$book->getActiveSheet();
+            verify($sheet->getCell('F12')->getValue()==='00012/QĐ' && $sheet->getCell('G12')->getValue()==='13/10/2026' && $sheet->getCell('M12')->getValue()==='0000123','Invoice and linked decision must populate the actual 2024 columns.');
+            if($kind==='tools')verify($sheet->getCell('L12')->getValue()==='CC-01' && ($sheet->getCell('L13')->getValue() ?? '')==='' && $sheet->getCell('L14')->getValue()==='CC-03' && $sheet->getCell('H12')->getValue()==='00013/QĐ','Whole-lot decreases and CCDC serials must map to all three units.');
+            else verify(($sheet->getCell('L12')->getValue() ?? '')==='' && $sheet->getCell('L13')->getValue()==='TS-02' && ($sheet->getCell('H12')->getValue() ?? '')==='' && str_contains($sheet->getCell('K12')->getValue(),'theo lô'),'Partial decreases must not be assigned to guessed serials.');
+            $book->disconnectWorksheets();
+        }finally{unlink($assetFile);}
+    }
+    $assetBill=array_values(array_filter(loadImports($pdo),static fn($r)=>$r['number']==='ASSET-BOOK'))[0];
+    $serialEdit=importEditPayload($assetBill,$csrf);$serialLines=json_decode($serialEdit['items'],true);$serialLines[1]['serial_numbers']="TS-01\nTS-02";$serialEdit['items']=json_encode($serialLines);
+    verify(httpManagement('imports',$serialEdit)[0]===200,'Serial metadata may be completed without modifying exported lot quantities or valuation.');
+    verify(loadStockBook($pdo,['kind'=>'fixed-assets','warehouse'=>$printWarehouseId,'from_month'=>'2026-10','to_month'=>'2026-10'],$actorId)['rows'][0]['serial']==='TS-01','Completed serials must immediately appear in exports.');
+    $pdo->exec("INSERT INTO products (code,name,category,unit) VALUES ('CATEGORY-CHANGE','Category change','other','Piece')");$categoryProduct=$pdo->lastInsertId();
+    $categoryVersion=$pdo->query('SELECT updated_at FROM products WHERE id='.$categoryProduct)->fetchColumn();
+    $categoryItem=['product_id'=>$categoryProduct,'version'=>$categoryVersion,'category'=>'consumable','quantity'=>'1','unit_price'=>'1','tax_code'=>'KCT'];
+    $categoryCreate=['csrf_token'=>$csrf,'action'=>'create','warehouse'=>$printWarehouseId,'number'=>'CATEGORY-CHANGE','received_date'=>'2026-10-13','receipt_type'=>'opening','status'=>'draft','items'=>json_encode([$categoryItem,$categoryItem])];
+    $bad=$categoryCreate;$badItems=[$categoryItem];$badItems[0]['category']='invalid';$bad['items']=json_encode($badItems);
+    verify(httpManagement('import-create',$bad)[0]===422,'Invalid categories must be rejected on linked goods.');
+    $badItems=[$categoryItem,$categoryItem];$badItems[1]['category']='other';$bad['items']=json_encode($badItems);
+    verify(httpManagement('import-create',$bad)[0]===422,'Repeated product lines cannot select conflicting categories.');
+    $badItems=[$categoryItem];$badItems[0]['quantity']='0';$bad['items']=json_encode($badItems);
+    verify(httpManagement('import-create',$bad)[0]===422 && $pdo->query('SELECT category FROM products WHERE id='.$categoryProduct)->fetchColumn()==='other','Invalid receipts must preserve the original product group.');
+    verify(httpManagement('import-create',$categoryCreate)[0]===200,'Changing the group of linked goods must save with the new receipt.');
+    $categoryRecord=array_values(array_filter(loadProducts($pdo),static fn($row)=>$row['id']===$categoryProduct))[0];
+    verify($categoryRecord['category']==='consumable' && $categoryRecord['closing']==='0.000000' && $categoryRecord['version']!==$categoryVersion,'Reclassification must update catalogue/version without changing stock for a draft.');
+    $serialProduct=$assetBill['items'][1]['product_id'];
+    $serialCategoryCreate=$categoryCreate;$serialCategoryCreate['number']='CATEGORY-RETAIN-SERIAL';$serialCategoryCreate['items']=json_encode([['product_id'=>$serialProduct,'version'=>$pdo->query('SELECT updated_at FROM products WHERE id='.$serialProduct)->fetchColumn(),'category'=>'consumable','quantity'=>'1','unit_price'=>'1','tax_code'=>'KCT']]);
+    verify(httpManagement('import-create',$serialCategoryCreate)[0]===200,'Goods with serial history may be reclassified without deleting serial metadata.');
+    $assetBill=array_values(array_filter(loadImports($pdo),static fn($row)=>$row['number']==='ASSET-BOOK'))[0];
+    verify($assetBill['items'][1]['serial_numbers']===['TS-01','TS-02'],'Category changes must preserve existing serials.');
+    verify(httpManagement('imports',importEditPayload($assetBill,$csrf))[0]===200,'Notes/decisions on historical serialized lots must remain editable after reclassification.');
+    $categoryAudits=$pdo->query("SELECT before_data,after_data FROM audit_logs WHERE entity_type='products' AND entity_id=$categoryProduct AND action='update'")->fetchAll();
+    verify(count($categoryAudits)===1 && json_decode($categoryAudits[0]['before_data'],true)['category']==='other' && json_decode($categoryAudits[0]['after_data'],true)['category']==='consumable','Repeated lines must cause one audited before/after category change.');
+    $bad=$categoryCreate;$bad['number']='STALE-CATEGORY';verify(httpManagement('import-create',$bad)[0]===422,'Stale catalogue versions must block category overwrite.');
+    $confirmState=static function()use($pdo,$csrf):array{$bill=array_values(array_filter(loadImports($pdo),static fn($row)=>$row['number']==='CATEGORY-CHANGE'))[0];return ['csrf_token'=>$csrf,'action'=>'confirm','id'=>$bill['id'],'version'=>$bill['version']];};
+    $confirmInput=$confirmState();$confirmId=$confirmInput['id'];
+    $bad=$confirmInput;$bad['csrf_token']='bad';verify(httpManagement('imports',$bad)[0]===403,'Confirmations must enforce CSRF.');
+    $bad=$confirmInput;$bad['version']=str_repeat('0',64);verify(httpManagement('imports',$bad)[0]===422,'Stale confirmations must not change stock.');
+    $pdo->prepare('UPDATE import_bill SET total_before_tax=3 WHERE id=?')->execute([$confirmId]);
+    verify(httpManagement('imports',$confirmState())[0]===422,'Mismatched header/line totals must block confirmation.');
+    $pdo->prepare('UPDATE import_bill SET total_before_tax=2 WHERE id=?')->execute([$confirmId]);
+    $pdo->prepare("UPDATE products SET status='inactive' WHERE id=?")->execute([$categoryProduct]);
+    verify(httpManagement('imports',$confirmState())[0]===422,'Inactive goods must block confirmation.');
+    $pdo->prepare("UPDATE products SET status='active' WHERE id=?")->execute([$categoryProduct]);
+    $pdo->prepare('UPDATE import_bill_details SET received_quantity=NULL WHERE import_bill_id=?')->execute([$confirmId]);
+    verify(httpManagement('imports',$confirmState())[0]===422,'Tracked goods without quantities must block confirmation.');
+    $pdo->prepare('UPDATE import_bill_details SET received_quantity=1 WHERE import_bill_id=?')->execute([$confirmId]);
+    verify(httpManagement('imports',$confirmState())[0]===200,'A valid draft must confirm successfully.');
+    $confirmedBill=array_values(array_filter(loadImports($pdo),static fn($row)=>$row['id']===$confirmId))[0];
+    verify($confirmedBill['status']==='confirmed' && count($confirmedBill['items'])===2 && $confirmedBill['print_snapshot']!==null,'Confirmation must retain receipt lines and the saved printing snapshot.');
+    verify(array_values(array_filter(loadProducts($pdo),static fn($row)=>$row['id']===$categoryProduct))[0]['closing']==='2.000000' && loadExportSources($pdo,$confirmedBill['items'][0]['id'])[0]['remaining_quantity']==='1.000000','Confirmed drafts must enter stock and become selectable export lots.');
+    $confirmAudit=$pdo->query("SELECT before_data,after_data FROM audit_logs WHERE entity_type='import_bill' AND entity_id=$confirmId AND action='confirm'")->fetchAll();
+    verify(count($confirmAudit)===1 && json_decode($confirmAudit[0]['before_data'],true)['status']==='draft' && json_decode($confirmAudit[0]['after_data'],true)['status']==='confirmed','Confirmation must audit its before/after state once.');
+    verify(httpManagement('imports',$confirmState())[0]===422 && array_values(array_filter(loadProducts($pdo),static fn($row)=>$row['id']===$categoryProduct))[0]['closing']==='2.000000','Repeated confirmation must be rejected without double-counting stock.');
+    $confirmationRollbackCreate=$categoryCreate;$confirmationRollbackCreate['number']='ROLLBACK-CONFIRM';$categoryItem['version']=$pdo->query('SELECT updated_at FROM products WHERE id='.$categoryProduct)->fetchColumn();$confirmationRollbackCreate['items']=json_encode([$categoryItem]);
+    verify(httpManagement('import-create',$confirmationRollbackCreate)[0]===200,'Rollback confirmation fixture failed.');
+    $confirmationRollbackBill=array_values(array_filter(loadImports($pdo),static fn($row)=>$row['number']==='ROLLBACK-CONFIRM'))[0];
     $pdo->prepare('UPDATE employees SET status=? WHERE id=?')->execute(['inactive',$printEmployeeId]);
     $printImport['print_version']=loadManagement($pdo,'import-create')['printVersions'][$printWarehouseId];
     verify(httpManagement('import-create',$printImport)[0]===422,'New receipts must reject an inactive default signer.');
     $pdo->prepare('UPDATE employees SET status=? WHERE id=?')->execute(['active',$printEmployeeId]);
     $pdo->exec("CREATE TRIGGER test_audit_failure BEFORE INSERT ON audit_logs FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Test audit failure'");
+    verify(httpManagement('imports',['csrf_token'=>$csrf,'action'=>'confirm','id'=>$confirmationRollbackBill['id'],'version'=>$confirmationRollbackBill['version']])[0]===503 && $pdo->query('SELECT status FROM import_bill WHERE id='.$confirmationRollbackBill['id'])->fetchColumn()==='draft' && loadExportSources($pdo,$confirmationRollbackBill['items'][0]['id'])===[],'Failed audit must leave the receipt draft and stock unchanged.');
+    $categoryItem['version']=$pdo->query('SELECT updated_at FROM products WHERE id='.$categoryProduct)->fetchColumn();$categoryItem['category']='fixed_asset';$categoryCreate['number']='ROLLBACK-CATEGORY';$categoryCreate['items']=json_encode([$categoryItem]);
+    verify(httpManagement('import-create',$categoryCreate)[0]===503 && $pdo->query('SELECT category FROM products WHERE id='.$categoryProduct)->fetchColumn()==='consumable' && !(int)$pdo->query("SELECT COUNT(*) FROM import_bill WHERE number='ROLLBACK-CATEGORY'")->fetchColumn(),'Category changes and receipt creation must roll back together when audit fails.');
     $printWarehouse=managementSnapshot($pdo,'warehouses',$printWarehouseId);
     $printUpdate['version']=$printWarehouse['updated_at'];$printUpdate['print_settings']['unit_name']='Must roll back';
     verify(httpManagement('warehouses',$printUpdate)[0]===503 && managementSnapshot($pdo,'warehouses',$printWarehouseId)===$printWarehouse,'Warehouse printing settings must roll back when audit insertion fails.');

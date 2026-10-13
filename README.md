@@ -191,7 +191,7 @@ Date, warehouse, category, stock-state and product filters share the same ledger
 
 Reconciliation flags confirmed receipts with no details or header totals differing from exact line sums. Scope is the selected warehouse through the end date, including opening history, independent of category/search/stock filters. Reports use line amounts and never rewrite existing records. The expandable check list identifies affected receipts; Excel adds a `Doi soat` sheet when checks or unknown quantities exist. Account totals count each account once, including locked accounts, prioritizing admin then keeper then viewer, and do not apply the report period filter.
 
-Compared with `reference_source/public/reports/`, the old materials/parts spreadsheets merged goods by name across warehouses and did not restrict receipt status. The new calculation uses confirmed product/warehouse ledgers instead. Old tool/asset exports relied on catalogue import dates and prices; the new reports use confirmed receipt history and show opening/period/closing values. Tools/assets do not calculate depreciation or accounting allocations absent from the schema. Receipt notes are available; the old serial field is absent from the new products schema. Adding a serial register or depreciation schedule later would require an explicit business model and schema change.
+Compared with `reference_source/public/reports/`, the old materials/parts spreadsheets merged goods by name across warehouses and did not restrict receipt status. The new calculation uses confirmed product/warehouse ledgers instead. Old tool/asset exports relied on catalogue import dates and prices; the new reports use confirmed receipt history and show opening/period/closing values. Tools/assets do not calculate depreciation or accounting allocations absent from the schema. Receipt notes are available. Per-piece serials are now stored on import receipt lines for the separate CCDC/TSCĐ template exports described below; depreciation and selection of specific serials when issuing stock remain outside the current model.
 
 Each report supports 10-row pagination, movement details with fixed dialog header/footer, monthly value charts, printing all filtered rows and genuine XLSX export with report and movement worksheets. Exported movements retain historical product names, units and notes from receipt lines. Local SheetJS CE 0.20.3 (Apache-2.0) writes XLSX without runtime CDN requests. Numbers exceeding Excel precision remain text, and names remain strings rather than spreadsheet formulas. Excel layouts follow the new reports rather than the old fixed spreadsheet templates. Dates and quick period presets use Vietnam time. Invalid filters disable print/export.
 
@@ -225,9 +225,98 @@ Editing updates catalogue fields and audits the change atomically, with CSRF/adm
 
 Checks: `php tests/home.php --products`, `php tests/auth.php`, `php tests/management.php` (isolated database), and `node tests/home-ui.mjs`.
 
+### Materials and spare-parts Excel
+
+Materials and spare-parts pages provide **Xuất Excel** with a warehouse and inclusive
+month range. `index.php?page=product-excel` reads the authorized confirmed ledger
+and warehouse metadata in one transaction, reusing report opening/import/export/
+closing calculations. Drafts, cancelled receipts and future movements are excluded;
+catalogue codes remain separate, including identical names. The workbook exports
+the whole category ledger at the selected warehouse, independently of table search
+or pagination. Viewers and keepers can download only warehouses currently granted
+to them; admins can include inactive history. GET downloads write no business data.
+
+`resources/templates/products/mau_vat_tu.xlsx` is an unchanged copy of the old
+materials template. `mau_phu_tung_thay_the.xlsx` duplicates that file with the title,
+name-column heading and sheet name changed for spare parts. Both retain layout,
+styles, widths and print settings. Exports replace fixed unit/address/date/signers
+using warehouse printing configuration; the warehouse address supplies the address,
+and configured keeper/accountant/director names fill the three signatures. Missing
+configuration stays blank; unit names fall back to the warehouse name. Quantity
+columns follow the actual template: C opening, D import, E export, F closing,
+correcting the swapped E/F assignment in the old materials exporter. BCMath totals
+and safe text cells preserve precision and prevent spreadsheet formulas in names.
+Rows show catalogue codes and units, unknown quantities stay unknown, and quantities
+of different units are not added into a misleading total. Additional item rows move
+totals, dates, signatures and the print area together.
+
+Checks: `php tests/stock-book-excel.php`, `php tests/management.php` (isolated
+database and real HTTP downloads), and `node tests/home-ui.mjs` (month validation,
+warehouse selection, both buttons and fixed dialog headers/actions).
+
+### Tools and fixed-assets Excel (2024 templates)
+
+The **Công cụ, dụng cụ** and **Tài sản cố định** pages also provide **Xuất Excel**.
+Both local templates derive from the old `mau_cong_cu_dung_cu.xlsx` sheet **2024**,
+as agreed; the old fixed-assets file only has a 2021 sheet. The two new templates
+contain one sheet each with sample records, people, addresses and years removed.
+The fixed-assets copy has its own title/headings. Original styles, column widths,
+merged headings and signature layout remain; the print area now includes A:N so
+serial, invoice and warehouse columns are printed as well.
+
+Exports read confirmed import lots in the authorized warehouse. Filter dates use
+the linked decision's issue date, falling back to receipt date if no decision is
+linked. Every received piece becomes a separate row, including pieces later
+issued: quantity 2 yields two rows, and missing serials remain blank. Columns
+F/G contain the linked decision number/issue date, L the serial, M the invoice
+number, N the warehouse name. Missing decisions stay blank. Column D remains
+blank following the removal of specifications; its template layout is retained.
+Unit, address, date and signatures use the same warehouse configuration as the
+materials/parts books. No template sample metadata survives into downloads.
+
+For a single confirmed decrease/transfer covering the whole lot, H/I/J show its
+linked decision and reason on each piece. Partial or multiple decreases have no
+per-piece identity in the current export schema, so they remain a lot-level note
+with receipt numbers rather than assigning a decision to an arbitrary serial.
+Unknown quantities produce one clearly marked record; fractional asset quantities
+are rejected. Expanded workbooks are limited to 2000 rows; choose a smaller period
+for larger registers. Text cells preserve leading zeros and prevent formulas.
+
+Apply `database/2026-10-13-import-item-serials.sql` before deploying this code. It
+adds nullable JSON-array storage `import_bill_details.serial_numbers`, leaving old
+records unchanged. This migration has been applied to the local `qlvt-new` DB.
+In **Phiếu nhập → Chi tiết → Chỉnh sửa**, CCDC/TSCĐ lines show a serial textarea:
+one line per piece, with blank lines for missing serials. Positions are retained;
+nonempty duplicates within a lot, excess entries and serials without an integer
+quantity are rejected. Metadata edits work even after a lot has been issued and
+use existing warehouse permissions, CSRF, versions and audit transactions.
+
+Checks: `php tests/asset-book-excel.php`, `php tests/management.php` (isolated DB,
+serial editing and real XLSX downloads), and `node tests/home-ui.mjs` (four export
+buttons, fixed dialogs and serial positions on locked receipt lines).
+
+### Reclassifying goods while creating import receipts
+
+The **Nhóm hàng** selector is editable for both new and existing goods, including
+those matched automatically from XML. On saving a draft or confirmed receipt,
+the selected group updates the linked product in the catalogue, so existing
+history and reports for that product use the new group. A visible line note
+explains this scope; identity, unit and tracking mode retain their catalogue
+values. No product group changes occur while merely reading XML or editing the
+form. Invalid groups and conflicting selections for repeated product lines are
+rejected; omitted groups retain the stored category for existing callers.
+
+Admins can reclassify all accessible goods. Keepers can reclassify only goods
+whose import/export history is entirely in warehouses they manage; a product
+shared with a viewer/foreign/inactive warehouse requires an admin. Existing
+catalogue version checks prevent stale overwrites. The group update and its
+before/after audit share the receipt transaction: invalid totals, stale print
+configuration or failed audit roll back both. Existing per-piece serials are
+retained when a product moves to a different group.
+
 ### Import receipt list
 
-`index.php?page=imports` reads real `import_bill` and `import_bill_details` records within the account's warehouse scope. It supports accent-insensitive searches (including line items), warehouse/type/status filters, inclusive date ranges, date/number sorting and 10 receipts per page. Detail dialogs show invoice and supplier information, the creator, stored header totals and historical line-item snapshots with taxes, related decisions and attached invoice PDFs. Decimal values retain all six fractional digits. Only the dialog body scrolls; its heading and close button remain fixed. The list includes drafts and cancelled receipts for reference. POST supports line editing, deletion of drafts and cancellation of confirmed receipts, with CSRF, keeper/admin checks at the receipt warehouse and version validation.
+`index.php?page=imports` reads real `import_bill` and `import_bill_details` records within the account's warehouse scope. It supports accent-insensitive searches (including line items), warehouse/type/status filters, inclusive date ranges, date/number sorting and 10 receipts per page. Detail dialogs show invoice and supplier information, the creator, stored header totals and historical line-item snapshots with taxes, related decisions and attached invoice PDFs. Decimal values retain all six fractional digits. Only the dialog body scrolls; its heading and close button remain fixed. The list includes drafts and cancelled receipts for reference. POST supports line editing, confirmation/deletion of drafts and cancellation of confirmed receipts, with CSRF, keeper/admin checks at the receipt warehouse and version validation.
 
 Drafts expose **Xóa**, with a confirmation that their lines and receipt-owned PDF/photos will be removed. Products, suppliers and immutable audit history are retained. Database deletion and its full before snapshot commit together; only then are validated private uploads cleaned up. Shared file paths still referenced by other attachment records are retained. Rollback never removes files; a filesystem cleanup failure is logged and reported in the success notice rather than pretending the committed deletion failed.
 
@@ -288,6 +377,25 @@ PDF.js runtime files and licenses are under `public/assets/vendor/pdfjs/`; sourc
 
 **Chỉnh sửa** in receipt details edits saved line names, quantities/units, prices, before-tax amounts, taxes, decision links and notes. Quantity/price changes calculate amounts and tax with six-decimal arithmetic; explicit amounts can be corrected independently. Saving updates line snapshots and header totals, retaining all attachments and catalogue records. Tracked unit corrections must match the catalogue unit. Cancelled receipts are read-only; lots referenced by any export or received through a paired transfer retain their quantity and valuation, while their decision/notes can be edited. Only confirmed receipts can link a decision from the same warehouse; selecting no decision requires a reason in the note. CSRF, row ownership, version checks, the shared write lock and an atomic audit record prevent stale or partial writes. No schema change is required.
 
+### Confirming draft imports
+
+Draft receipts show **Xác nhận** in the list and **Xác nhận nhập kho** in the detail
+footer. Both use the existing state dialog with fixed header/actions and a
+scrolling body. Confirmation is hidden while editing unsaved lines; save those
+changes first. `POST index.php?page=imports` with `action=confirm`, receipt ID,
+CSRF and version changes only a draft to confirmed. Viewers cannot submit it;
+admins/keepers must have management rights at the exact active warehouse.
+
+The transaction locks the current receipt and lines, rejects stale/repeated
+requests, empty receipts, transfers/linked export lots, inactive goods, missing
+tracked quantities, mismatched tracked units, invalid money, mismatched header
+sums and duplicate supplier invoices. It preserves all lines, decisions, serials,
+photos/PDFs and the existing printing snapshot. The confirmed status makes the
+same lines count in the existing stock/report ledger and available export lots;
+no duplicate movements are inserted. A before/after `confirm` audit commits in
+the same transaction. Failed validation or audit leaves draft status and stock
+unchanged. This action requires no schema changes.
+
 ### Receipt Excel downloads
 
 The specifications feature has been removed from goods, receipt creation/details, searches, reports and Excel output. Existing nullable database columns and historical values are retained for compatibility; new products/receipt lines do not populate them and catalogue edits do not overwrite them. The original receipt template files remain unchanged.
@@ -296,7 +404,7 @@ Both receipt lists and their fixed dialog footers provide **Excel / Xuất Excel
 
 The two original `reference_source_2/mau_phieu_*_kho.xlsx` files are copied unchanged to `resources/templates/receipts/`, outside `public/` and included in Git. PhpSpreadsheet loads them, inserts additional item rows, and retains fonts, borders, column widths, signature positions and print settings. Export header fields use the same left/right merged ranges as imports to accommodate the department address and location. Header dates come from the receipt; sender/receiver names come from the saved document. Receipt number, draft/cancelled state and any discrepancy between header and line totals appear in the spare row below the title.
 
-Goods use saved receipt names, units and notes; product codes fill the existing code column. Serial remains blank because the new schema has no serial register. Export original-document numbers come from source import invoices, falling back to source receipt numbers. The table and total show stored **before-tax line amounts** (including exact export-lot allocations), rather than multiplying quantity by price again or applying a fixed VAT rate. BCMath preserves six decimal places; formatted amounts and untrusted text are written as Excel strings to prevent precision loss and formulas. Unknown quantities stay blank. Amounts in words support six decimal places and amounts of a billion or more.
+Goods use saved receipt names, units and notes; product codes fill the existing code column. The receipt template serial column remains blank: one receipt line can contain multiple per-piece serials, which appear separately in the CCDC/TSCĐ stock-book exports. Export original-document numbers come from source import invoices, falling back to source receipt numbers. The table and total show stored **before-tax line amounts** (including exact export-lot allocations), rather than multiplying quantity by price again or applying a fixed VAT rate. BCMath preserves six decimal places; formatted amounts and untrusted text are written as Excel strings to prevent precision loss and formulas. Unknown quantities stay blank. Amounts in words support six decimal places and amounts of a billion or more.
 
 Install the locked PHP dependencies with `composer install --no-dev` (PhpSpreadsheet 5.0.0 from the reference application's lock file). PHP 8.2+, BCMath, ZIP and GD are required together with the standard XML/mbstring extensions. ZIP/GD have been enabled in this local XAMPP configuration and Apache reloaded. The feature does not depend on either ignored reference directory at runtime.
 

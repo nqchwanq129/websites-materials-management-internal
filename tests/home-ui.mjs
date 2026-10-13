@@ -886,12 +886,31 @@ try {
         assert.equal(await evaluate(`productRows.every(row=>JSON.parse(row.dataset.product).category==='${category}')`), true);
         assert.equal(await evaluate(`Boolean(document.querySelector('[data-product-quantity="${column}"], .product-cell-${column}'))`), true);
         assert.equal(await evaluate(`productForm.getAttribute('action')==='index.php?page=${route}' && productForm.elements.category.options.length===1 && productForm.elements.category.value==='${category}'`), true);
+        assert.equal(await evaluate('Boolean(document.getElementById("product-export-open"))'), ['materials','spare-parts','tools','fixed-assets'].includes(route), 'Only the four stock-book categories should offer the template export.');
+        if (['materials','spare-parts','tools','fixed-assets'].includes(route)) {
+            await evaluate('document.getElementById("product-warehouse").value="1"; document.getElementById("product-export-open").click()');
+            assert.equal(await evaluate('productExportForm.elements.warehouse.value'), '1', 'Export should preselect the currently filtered warehouse.');
+            assert.equal(await evaluate('productExportForm.elements.kind.value'), route);
+            assert.equal(await evaluate('productExportForm.method'), 'get');
+            await evaluate('productExportForm.elements.from_month.value="2026-11";productExportForm.elements.to_month.value="2026-10";productExportForm.elements.to_month.dispatchEvent(new Event("input"))');
+            assert.equal(await evaluate('productExportForm.checkValidity()'),false);
+            await evaluate('productExportForm.elements.from_month.value="2026-09";productExportForm.elements.from_month.dispatchEvent(new Event("input"))');
+            assert.equal(await evaluate('productExportForm.checkValidity()'),true);
+            await evaluate('document.querySelector("[data-close-product-export]").click()');
+        }
         for (const [width,height] of [[1440,1000],[320,568],[844,390]]) {
             await page('Emulation.setDeviceMetricsOverride', {width,height,deviceScaleFactor:1,mobile:false});
             await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
             assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'), true, `${route} page overflow.`);
             const shot=await page('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
             writeFileSync(join(outputDir,`${route}-${width}x${height}.png`),Buffer.from(shot.data,'base64'));
+            if (['materials','spare-parts','tools','fixed-assets'].includes(route)) {
+                await evaluate('document.getElementById("product-export-open").click()');
+                assert.equal(await evaluate('(() => { const dialog=document.getElementById("product-export-dialog"),body=dialog.querySelector(".account-dialog-body"),header=dialog.querySelector("header"),footer=dialog.querySelector("footer"); const top=header.getBoundingClientRect().top,bottom=footer.getBoundingClientRect().top;body.scrollTop=body.scrollHeight;return top===header.getBoundingClientRect().top && bottom===footer.getBoundingClientRect().top && dialog.scrollWidth<=dialog.clientWidth && footer.getBoundingClientRect().bottom<=innerHeight; })()'),true,'Export dialog must keep headings/actions fixed and fit small screens.');
+                const exportShot=await page('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+                writeFileSync(join(outputDir,`${route}-export-${width}x${height}.png`),Buffer.from(exportShot.data,'base64'));
+                await evaluate('document.querySelector("[data-close-product-export]").click()');
+            }
         }
     }
     const importRender=spawnSync(php,['tests/home.php','--imports','--render'],{encoding:'utf8',windowsHide:true});
@@ -919,6 +938,16 @@ try {
     const deletedPreview=await evaluate(`(async()=>{const original=submitManagementForm;let captured;submitManagementForm=async (...args)=>{captured=Object.fromEntries(new FormData(args[0]));await original(...args);};try{importStateForm.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));await new Promise(resolve=>setTimeout(resolve,0));return captured;}finally{submitManagementForm=original;}})()`);
     assert.equal(deletedPreview.action,'delete');assert.equal(deletedPreview.id,'1');assert.equal('cancel_reason' in deletedPreview,false);
     assert.equal(await evaluate(`!importStateDialog.open && importRows.length===12`),true,'Preview confirmation must not remove real or sample receipt records.');
+    await evaluate(`importRows[0].querySelector('[data-action=confirm]').click()`);
+    assert.equal(await evaluate(`importStateDialog.open && importStateForm.elements.action.value==='confirm' && importStateForm.elements.cancel_reason.disabled && document.getElementById('import-state-submit').classList.contains('button-primary') && document.getElementById('import-state-warning').textContent.includes('tồn kho')`),true,'Draft confirmation must explain stock effects and omit cancellation fields.');
+    const confirmedPreview=await evaluate(`(async()=>{const original=submitManagementForm;let captured;submitManagementForm=async(...args)=>{captured=Object.fromEntries(new FormData(args[0]));await original(...args);};try{importStateForm.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));await new Promise(resolve=>setTimeout(resolve,0));return captured;}finally{submitManagementForm=original;}})()`);
+    assert.equal(confirmedPreview.action,'confirm');assert.equal(confirmedPreview.id,'1');assert.equal('cancel_reason' in confirmedPreview,false);
+    assert.equal(await evaluate(`!importStateDialog.open && JSON.parse(importRows[0].dataset.import).status==='draft'`),true,'Preview confirmation must not change real or sample stock.');
+    await evaluate(`openImport(JSON.parse(importRows[0].dataset.import))`);
+    assert.equal(await evaluate(`!document.getElementById('import-confirm').hidden && !document.getElementById('import-confirm').disabled`),true,'Editable draft details must offer confirmation.');
+    await evaluate(`document.getElementById('import-confirm').click()`);
+    assert.equal(await evaluate(`importDialog.open && importStateDialog.open && importStateForm.elements.action.value==='confirm'`),true,'The detail action must use the shared confirmation dialog.');
+    await evaluate(`importStateDialog.close();importDialog.close()`);
     await evaluate(`importRows[1].querySelector('.import-state').click()`);
     assert.equal(await evaluate(`importStateForm.elements.action.value==='cancel' && importStateForm.elements.cancel_reason.required && !importStateForm.checkValidity()`),true,'Cancellation must require a reason.');
     for(const [width,height] of [[1440,1000],[390,844],[320,568],[844,390]]){
@@ -956,6 +985,7 @@ try {
     assert.equal(await evaluate('document.querySelector("#import-item-rows td:nth-child(4)").textContent.includes("12.345.678.901.234,123456")'),true);
     assert.equal(await evaluate('document.querySelectorAll("#import-item-rows tr:first-child td").length'),7,'Receipt rows must include a separate image column.');
     await evaluate('document.getElementById("import-edit").click()');
+    assert.equal(await evaluate('document.getElementById("import-confirm").hidden'),true,'Confirmation must be hidden while unsaved receipt edits are open.');
     assert.equal(await evaluate('document.querySelectorAll("#import-item-rows [data-field=product_name]").length'),14);
     assert.equal(await evaluate('document.querySelector("#import-item-rows [data-field=unit_price]").value'),'12345678901234.123456','Editing must use exact database values, without display separators.');
     await evaluate(`(() => { const row=document.querySelector('#import-item-rows tr'),quantity=row.querySelector('[data-field=received_quantity]'),price=row.querySelector('[data-field=unit_price]');
@@ -967,6 +997,12 @@ try {
     assert.equal(editPayload.length,14);assert.equal(editPayload[0].id,'1');assert.equal(editPayload[0].received_quantity,'3.123456');assert.equal(editPayload[0].decision,'pending');
     await evaluate('importEditDirty=false;document.getElementById("import-edit-cancel").click()');
     assert.equal(await evaluate('document.querySelector("#import-item-rows td:nth-child(4)").textContent.includes("12.345.678.901.234,123456")'),true,'Cancel must restore the original snapshot.');
+    await evaluate(`importDialog.close();const serialBill=JSON.parse(importRows[0].dataset.import);Object.assign(serialBill.items[0],{category:'fixed_asset',received_quantity:'2.000000',stock_locked:1,serial_numbers:['','SN-002']});openImport(serialBill)`);
+    assert.equal(await evaluate(`document.querySelector('.import-serial-list').textContent.includes('Chiếc 1: Chưa có serial') && document.querySelector('.import-serial-list').textContent.includes('Chiếc 2: SN-002')`),true,'Missing serials must retain their piece position.');
+    await evaluate('document.getElementById("import-edit").click()');
+    assert.equal(await evaluate(`(()=>{const row=document.querySelector('#import-item-rows tr'),serial=row.querySelector('[data-field=serial_numbers]');return serial.tagName==='TEXTAREA' && serial.value==='\\nSN-002' && !serial.readOnly && row.querySelector('[data-field=product_name]').readOnly;})()`),true,'Serial metadata must remain editable for locked lots.');
+    assert.equal(await evaluate(`importEditItems()[0].serial_numbers`),'\nSN-002','The edit payload must preserve blank leading serial slots.');
+    await evaluate('importEditDirty=false;importDialog.close();openImport(JSON.parse(importRows[0].dataset.import))');
     let previewPdf='%PDF-1.4\n';const pdfOffsets=[0];
     const red='1 0 0 rg 0 0 200 200 re f\n',green='0 1 0 rg 0 0 200 200 re f\n';
     for(const object of ['<< /Type /Catalog /Pages 2 0 R >>','<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>','<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >>',
@@ -1070,7 +1106,7 @@ try {
     assert.equal(await evaluate('document.getElementById("import-total-after").textContent'),'3,089504 ₫','Preview totals must use exact decimals.');
     await evaluate('const selectedImportLine=importLines.firstElementChild;selectedImportLine.querySelector("[data-field=product_id]").value="1";configureImportLine(selectedImportLine,true)');
     assert.equal(await evaluate('importLines.firstElementChild.querySelector("[data-field=name]").readOnly'),true);
-    assert.equal(await evaluate('importLines.firstElementChild.querySelector("[data-field=category]").disabled'),true);
+    assert.equal(await evaluate('importLines.firstElementChild.querySelector("[data-field=category]").disabled'),false);
     await evaluate('supplierSelect.value="1";configureImportSupplier()');
     assert.equal(await evaluate('importCreateForm.elements.tax_code.readOnly'),true);
     await evaluate(`applyImportInvoice({invoice_number:'HD-TEST',invoice_series:'C26T',invoice_date:'2026-10-10',supplier_name:'Seller',tax_code:'1234567890',items:[
@@ -1078,6 +1114,12 @@ try {
         {product_id:'',code:'XML-NEW',name:'Service <script>',unit:'Lần',category:'other',tracking_mode:'none',quantity:'',unit_price:'10',tax_code:'KCT',tax_amount:'',note:''}]})`);
     assert.equal(await evaluate('importLines.children.length'),2);
     assert.equal(await evaluate('importLines.firstElementChild.querySelector("[data-field=product_id]").value'),'1','XML must match an existing product code.');
+    assert.equal(await evaluate(`(()=>{const row=importLines.firstElementChild;return !row.querySelector('[data-field=category]').disabled && row.querySelector('[data-field=category]').value==='spare_part' && !row.querySelector('[data-product-note]').hidden && row.querySelector('[data-product-note]').textContent.includes('Khi lưu phiếu');})()`),true,'XML matching existing goods must allow reclassification and explain its catalogue-wide effect.');
+    assert.equal(await evaluate(`(()=>{const row=importLines.firstElementChild;row.querySelector('[data-field=category]').value='fixed_asset';return importLineData(row).category==='fixed_asset' && importLineData(row).product_id==='1' && row.querySelector('[data-field=tracking_mode]').disabled;})()`),true,'Changing category must keep the linked product identity and stock tracking mode.');
+    assert.equal(await evaluate(`(()=>{const row=importLines.lastElementChild,category=row.querySelector('[data-field=category]');category.value='ccdc';category.dispatchEvent(new Event('change',{bubbles:true}));return !category.disabled && importLineData(row).category==='ccdc' && row.querySelector('[data-product-note]').hidden;})()`),true,'New XML goods must allow category selection and serialize that selection.');
+    await evaluate(`(()=>{const row=importLines.firstElementChild;row.querySelector('[data-field=product_id]').value='';configureImportLine(row,true);})()`);
+    assert.equal(await evaluate(`!importLines.firstElementChild.querySelector('[data-field=category]').disabled && importLines.firstElementChild.querySelector('[data-product-note]').hidden`),true,'Choosing new goods must unlock the category and hide the catalogue explanation.');
+    await evaluate(`(()=>{const row=importLines.firstElementChild;row.querySelector('[data-field=product_id]').value='1';configureImportLine(row,true);})()`);
     assert.equal(await evaluate('importLines.lastElementChild.querySelector("[data-field=quantity]").disabled'),true);
     assert.equal(await evaluate('document.getElementById("import-total-after").textContent'),'14,32 ₫');
     assert.equal(await evaluate('importCreateForm.elements.supplier_id.value'),'1','XML must match supplier tax code.');
@@ -1312,6 +1354,7 @@ try {
             assert.equal(await evaluate('Boolean(document.querySelector("a[href=\\"index.php?page=import-create\\"]"))'),role==='keeper');
             await evaluate('openImport(JSON.parse(importRows.find(row=>JSON.parse(row.dataset.import).can_edit===false).dataset.import))');
             assert.equal(await evaluate('document.getElementById("import-edit").hidden'),true,'A viewer-only warehouse must hide editing even in a mixed-role session.');
+            assert.equal(await evaluate('document.getElementById("import-confirm").hidden'),true,'Viewer receipt details must not offer confirmation.');
             await evaluate('renderImportItems(true)');
             assert.equal(await evaluate('importEditing'),false,'Read-only receipt details must remain read-only.');
             await evaluate('importDialog.close()');

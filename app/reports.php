@@ -14,7 +14,8 @@ function loadReportData(PDO $pdo, string $userId): array
 {
     $access=userAccess($pdo,$userId);
     if (!canAccessPage($access,'reports')) throw new DomainException('Bạn không có quyền xem báo cáo.');
-    $pdo->beginTransaction();
+    $ownTransaction = !$pdo->inTransaction();
+    if ($ownTransaction) $pdo->beginTransaction();
     try {
         $data=['warehouses'=>[],'products'=>[],'movements'=>[],'receipts'=>[],'accounts'=>[]];
         foreach($pdo->query('SELECT id,name FROM warehouses ORDER BY name,id') as $row) if(canViewWarehouse($access,(string)$row['id'])) $data['warehouses'][(string)$row['id']]=$row['name'];
@@ -44,8 +45,8 @@ function loadReportData(PDO $pdo, string $userId): array
             WHEN EXISTS(SELECT 1 FROM user_warehouses g WHERE g.user_id=u.id AND g.role='keeper') THEN 'Thủ kho'
             WHEN EXISTS(SELECT 1 FROM user_warehouses g WHERE g.user_id=u.id AND g.role='viewer') THEN 'Người xem'
             ELSE 'Chưa phân quyền' END AS role,COUNT(*) AS count FROM users u GROUP BY role") as $row) $data['accounts'][$row['role']]=(int)$row['count'];
-        $pdo->commit(); return $data;
-    } catch(Throwable $error) { if($pdo->inTransaction()) $pdo->rollBack(); throw $error; }
+        if ($ownTransaction) $pdo->commit(); return $data;
+    } catch(Throwable $error) { if($ownTransaction && $pdo->inTransaction()) $pdo->rollBack(); throw $error; }
 }
 function reportNumber(?string $value, int $decimals = 6, string $trackingMode = 'quantity'): string
 {
