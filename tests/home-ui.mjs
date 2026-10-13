@@ -40,6 +40,7 @@ try {
     const requestUrls = new Map();
     const downloads = [];
     let postRequests = 0;
+    let notificationMockPosts = 0;
     socket.addEventListener('message', event => {
         const message = JSON.parse(event.data);
         if (message.method === 'Runtime.exceptionThrown') pageErrors.push(message.params.exceptionDetails.text);
@@ -1376,9 +1377,75 @@ try {
         const roleShot=await page('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
         writeFileSync(join(outputDir,`${role}-${route}${mixed?'-mixed':''}.png`),Buffer.from(roleShot.data,'base64'));
     }
+    const noticeSource=spawnSync(php,['tests/home.php','--render'],{encoding:'utf8',windowsHide:true});assert.equal(noticeSource.status,0);
+    const noticeHtml=noticeSource.stdout.replace('data-user="1" data-preview="true"','data-user="1" data-preview="false"');
+    let noticeRecords=Array.from({length:9},(_,index)=>({id:String(9-index),kind:index===0?'admin':'receipt',title:index===0?'Thêm kho <script> mới':'Phiếu nhập mới PN-'+(9-index),description:index===0?'Thông báo quản trị · Toàn hệ thống':'Kho Hà Nội',created_at:'2026-10-13T10:00:00+07:00',href:index===0?null:'index.php?page=imports&id='+(9-index)}));
+    const noticeRead=new Set();let noticeScope='scope-A',noticeReadFails=false,noticeRequestCount=0,noticeDestination=null,noticeSessionExpired=false;
+    const noticeHandler=async event=>{const message=JSON.parse(event.data);if(message.method!=='Fetch.requestPaused')return;
+        const request=message.params.request,url=new URL(request.url);let response,status=200;
+        if(url.searchParams.get('page')==='imports'){noticeDestination=request.url;await page('Fetch.fulfillRequest',{requestId:message.params.requestId,responseCode:200,responseHeaders:[{name:'Content-Type',value:'text/html'}],body:Buffer.from('<!doctype html><title>Receipt destination</title>').toString('base64')});return;}
+        noticeRequestCount++;
+        if(noticeSessionExpired){status=401;response={ok:false,message:'Tài khoản đã đăng nhập ở nơi khác.'};}
+        else if(request.method==='POST'){notificationMockPosts++;const fields=new URLSearchParams(request.postData);if(noticeReadFails){status=503;response={ok:false,message:'Không lưu được trạng thái đã xem.'};}else{noticeRead.add(fields.get('id'));response={ok:true};}}
+        else{const unread=noticeRecords.filter(item=>!noticeRead.has(item.id)),before=url.searchParams.get('before'),rows=unread.filter(item=>!before || BigInt(item.id)<BigInt(before)),known=url.searchParams.getAll('known[]');
+            response={ok:true,items:rows.slice(0,5),unread_count:unread.length,latest_id:noticeRecords[0]?.id || '0',next_before:rows.length>5?rows[4].id:null,alive_ids:unread.filter(item=>known.includes(item.id)).map(item=>item.id),scope:noticeScope};}
+        await page('Fetch.fulfillRequest',{requestId:message.params.requestId,responseCode:status,responseHeaders:[{name:'Content-Type',value:'application/json; charset=utf-8'}],body:Buffer.from(JSON.stringify(response)).toString('base64')});
+    };
+    socket.addEventListener('message',noticeHandler);await page('Fetch.enable',{patterns:[{urlPattern:'*index.php?page=notifications*'},{urlPattern:'*index.php?page=imports&id=*'}]});
+    await page('Page.navigate',{url:'http://localhost/qlvt-remake/public/index.php?page=login'});
+    for(let i=0;i<100;i++){if(await evaluate('document.readyState==="complete" && Boolean(document.getElementById("login-form"))'))break;await new Promise(resolve=>setTimeout(resolve,100));}
+    const noticeFrame=await page('Page.getFrameTree');await page('Page.setDocumentContent',{frameId:noticeFrame.frameTree.frame.id,html:noticeHtml});
+    for(let i=0;i<100;i++){if(await evaluate('typeof loadActivityNotifications==="function" && !activityLoading && activityItems.length===5'))break;await new Promise(resolve=>setTimeout(resolve,100));}
+    assert.equal(await evaluate('activityItems.length'),5);assert.equal(await evaluate('document.getElementById("activity-badge").textContent'),'9');
+    await evaluate('clearTimeout(activityTimer);activityAudio=null;activityPendingSound=false;activityFrontier=null;window.noticeBeeps=0;window.originalActivityBeep=activityBeep;activityBeep=()=>{window.noticeBeeps++;};activityAudio={state:"running"};activitySound=true;loadActivityNotifications("reset")');
+    for(let i=0;i<100;i++){if(await evaluate('!activityLoading'))break;await new Promise(resolve=>setTimeout(resolve,30));}
+    assert.equal(await evaluate('noticeBeeps'),0,'Existing unread notices must not replay a sound after initial loading.');
+    await evaluate('document.getElementById("activity-toggle").click()');
+    for(let i=0;i<100;i++){if(await evaluate('activityPanel.matches(":popover-open") && !activityLoading'))break;await new Promise(resolve=>setTimeout(resolve,30));}
+    assert.equal(await evaluate('activityPanel.querySelectorAll("script").length'),0,'Notification titles must be escaped text.');
+    assert.equal(await evaluate('activityList.firstElementChild.querySelector("a")===null && activityList.firstElementChild.textContent.includes("<script>")'),true,'Admin messages must remain plain content without navigation.');
+    await evaluate('activityMore.click()');for(let i=0;i<100;i++){if(await evaluate('!activityLoading'))break;await new Promise(resolve=>setTimeout(resolve,30));}
+    assert.equal(await evaluate('activityItems.length'),9,'Show more must append older unread notifications.');
+    for(const [width,height] of [[1440,1000],[390,844],[320,568],[844,390]]){
+        await page('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+        assert.equal(await evaluate(`(()=>{const body=activityPanel.querySelector('.activity-body'),header=activityPanel.querySelector('header'),footer=activityPanel.querySelector('footer'),before=[header.getBoundingClientRect().top,footer.getBoundingClientRect().top];body.scrollTop=body.scrollHeight;const rect=activityPanel.getBoundingClientRect();return before[0]===header.getBoundingClientRect().top && before[1]===footer.getBoundingClientRect().top && rect.left>=0 && rect.right<=innerWidth && rect.bottom<=innerHeight && activityPanel.scrollWidth<=activityPanel.clientWidth && document.documentElement.scrollWidth<=innerWidth;})()`),true,'Notification panel must fit the screen with fixed heading/actions and a scrolling body.');
+        await evaluate('activityPanel.querySelector(".activity-body").scrollTop=0');const shot=await page('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});writeFileSync(join(outputDir,`activity-notifications-${width}x${height}.png`),Buffer.from(shot.data,'base64'));
+    }
+    const beforeReadPosts=notificationMockPosts;
+    await evaluate('markActivityRead(activityItems.find(row=>row.id==="9"))');
+    assert.equal(await evaluate('activityItems.some(row=>row.id==="9")'),false,'Seen notices must leave the list immediately.');assert.equal(notificationMockPosts,beforeReadPosts+1);
+    await evaluate('loadActivityNotifications("reset")');for(let i=0;i<100;i++){if(await evaluate('!activityLoading'))break;await new Promise(resolve=>setTimeout(resolve,30));}
+    assert.equal(await evaluate('activityItems.some(row=>row.id==="9")'),false,'Read notices must stay absent after refreshing.');
+    noticeReadFails=true;await evaluate('markActivityRead(activityItems[0])');assert.equal(await evaluate('activityItems.some(row=>row.id==="8")'),true,'Failed read requests must retain unread notices.');noticeReadFails=false;
+    noticeRecords.unshift({id:'10',kind:'admin',title:'Kho mới',description:'Thông báo quản trị',created_at:'2026-10-13T10:01:00+07:00',href:null});
+    await evaluate('loadActivityNotifications()');for(let i=0;i<100;i++){if(await evaluate('!activityLoading'))break;await new Promise(resolve=>setTimeout(resolve,30));}
+    assert.equal(await evaluate('noticeBeeps'),1,'A new event during login must produce one soft chime.');
+    await evaluate('loadActivityNotifications()');for(let i=0;i<100;i++){if(await evaluate('!activityLoading'))break;await new Promise(resolve=>setTimeout(resolve,30));}assert.equal(await evaluate('noticeBeeps'),1,'Polling the same event must not replay sound.');
+    await evaluate('document.getElementById("activity-sound").click()');noticeRecords.unshift({id:'11',kind:'admin',title:'Cập nhật danh mục',description:'Thông báo quản trị',created_at:'2026-10-13T10:02:00+07:00',href:null});
+    await evaluate('loadActivityNotifications()');for(let i=0;i<100;i++){if(await evaluate('!activityLoading'))break;await new Promise(resolve=>setTimeout(resolve,30));}assert.equal(await evaluate('noticeBeeps'),1,'Muted notifications must remain silent.');
+    noticeRead.add('8');await evaluate('loadActivityNotifications()');for(let i=0;i<100;i++){if(await evaluate('!activityLoading'))break;await new Promise(resolve=>setTimeout(resolve,30));}
+    assert.equal(await evaluate('activityItems.some(row=>row.id==="8")'),false,'Polling must remove notices read on another device/tab.');
+    noticeScope='scope-B';noticeRecords=noticeRecords.filter(row=>row.kind==='admin');
+    await evaluate('loadActivityNotifications()');for(let i=0;i<100;i++){if(await evaluate('!activityLoading'))break;await new Promise(resolve=>setTimeout(resolve,30));}
+    assert.equal(await evaluate('activityItems.every(row=>row.kind==="admin")'),true,'Scope changes must clear cached warehouse notices.');
+    await evaluate(`window.savedActivityRequest=activityRequest;window.readPollRelease=null;activityRequest=async(url,options={})=>{const result=await savedActivityRequest(url,options);if(options.method!=='POST')await new Promise(resolve=>{window.readPollRelease=resolve;});return result;};window.delayedReadPoll=loadActivityNotifications();true;`);
+    for(let i=0;i<100;i++){if(await evaluate('readPollRelease!==null'))break;await new Promise(resolve=>setTimeout(resolve,20));}
+    await evaluate('markActivityRead(activityItems.find(row=>row.id==="10"))');
+    await evaluate('activityRequest=savedActivityRequest;readPollRelease();delayedReadPoll');
+    assert.equal(await evaluate('activityCount'),1,'An old poll finishing after a read must not restore the previous unread count.');
+    for(let i=0;i<100;i++){if(await evaluate('!activityLoading'))break;await new Promise(resolve=>setTimeout(resolve,20));}
+    noticeRecords.unshift({id:'12',kind:'receipt',title:'Phiếu đích',description:'Kho Hà Nội',created_at:'2026-10-13T10:03:00+07:00',href:'index.php?page=imports&id=712'});
+    await evaluate('loadActivityNotifications()');for(let i=0;i<100;i++){if(await evaluate('!activityLoading'))break;await new Promise(resolve=>setTimeout(resolve,30));}
+    await evaluate('activityAudio=null;activityBeep=originalActivityBeep;activityList.querySelector("a").click()');
+    for(let i=0;i<100;i++){if(noticeDestination)break;await new Promise(resolve=>setTimeout(resolve,50));}
+    assert.equal(new URL(noticeDestination).searchParams.get('id'),'712','Clicking a receipt notice must mark it read and open the exact linked receipt.');assert.equal(noticeRead.has('12'),true);
+    noticeSessionExpired=true;const expiredFrame=await page('Page.getFrameTree');await page('Page.setDocumentContent',{frameId:expiredFrame.frameTree.frame.id,html:noticeHtml});
+    for(let i=0;i<150;i++){if(await evaluate('new URL(location.href).searchParams.get("page")==="login" && document.readyState==="complete" && Boolean(document.getElementById("login-form"))'))break;await new Promise(resolve=>setTimeout(resolve,50));}
+    assert.equal(await evaluate('new URL(location.href).searchParams.get("page")==="login" && Boolean(document.getElementById("login-form"))'),true,'A replaced/expired login detected by background polling must automatically return to login.');
+    assert.ok(noticeRequestCount>0);await page('Fetch.disable');socket.removeEventListener('message',noticeHandler);
     assert.deepEqual(pageErrors, [], 'Browser errors.');
     assert.deepEqual(failedRequests, [], 'Asset loading errors.');
-    assert.equal(postRequests, 0, 'Dashboard sample controls must not submit business data.');
+    assert.equal(postRequests, notificationMockPosts, 'Sample controls must not submit business data; notification read requests use mocked endpoints only.');
     console.log(`PASS: dashboard/sidebar, management, reports with XLSX/print, import/export forms and filters, lot allocation, notifications and responsive layout.\nScreenshots: ${outputDir}`);
     await send('Browser.close');
 } finally {

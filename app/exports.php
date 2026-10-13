@@ -46,7 +46,7 @@ function saveExport(PDO $pdo, string $actorId, array $input, array $files = []):
         // ponytail: shared global management lock prevents double spending; use ordered lot locks if write volume grows.
         $pdo->query('SELECT id FROM users ORDER BY id FOR UPDATE')->fetchAll();
         $actor = findUser($pdo, 'id', $actorId);
-        if (!userCanSignIn($actor) || warehousePermission($pdo, $actorId, $warehouse) !== 'keeper') throw new DomainException('Bạn không có quyền xuất kho hoặc kho đã ngừng hoạt động.');
+        if (!userCanAct($actor) || warehousePermission($pdo, $actorId, $warehouse) !== 'keeper') throw new DomainException('Bạn không có quyền xuất kho hoặc kho đã ngừng hoạt động.');
         if ($destination !== null && warehousePermission($pdo, $actorId, $destination) !== 'keeper') throw new DomainException('Kho nhận không tồn tại hoặc đã ngừng hoạt động.');
         $sources = []; $lines = []; $total = '0.000000';
         foreach ($items as $item) {

@@ -24,6 +24,7 @@ if (!$access['admin']) {
     $navigation = array_values(array_filter($navigation,static fn($group)=>(bool)$group[2]));
 }
 $icons = [
+    'bell' => '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/>',
     'grid' => '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
     'chart' => '<path d="M4 4v16h16M8 15v-4m5 4V7m5 8v-6"/>',
     'box' => '<path d="m12 3 9 5v8l-9 5-9-5V8l9-5Zm-9 5 9 5 9-5m-9 5v8M7.5 5.5l9 5"/>',
@@ -63,6 +64,8 @@ $openGroup = ['exports' => 'Phiếu xuất kho', 'export-create' => 'Phiếu xu�
     <script src="<?= $assetUrl('assets/js/dashboard.js') ?>" defer></script>
     <link rel="stylesheet" href="<?= $assetUrl('assets/css/accounts.css') ?>">
     <script src="<?= $assetUrl('assets/js/profile.js') ?>" defer></script>
+    <link rel="stylesheet" href="<?= $assetUrl('assets/css/activity-notifications.css') ?>">
+    <script src="<?= $assetUrl('assets/js/activity-notifications.js') ?>" defer></script>
     <?php if (in_array($activePage, ['imports','import-create'], true)): ?><link rel="stylesheet" href="<?= $assetUrl('assets/css/import-images.css') ?>"><script src="<?= $assetUrl('assets/js/import-images.js') ?>" defer></script><?php endif; ?>
     <?php if (in_array($activePage, ['imports', 'import-create', 'export-create'], true)): ?><script src="<?= $assetUrl('assets/js/receipt-decimal.js') ?>" defer></script><?php endif; ?>
     <?php $isProductPage = in_array($activePage, ['products', 'materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products'], true); ?>
@@ -102,5 +105,5 @@ $openGroup = ['exports' => 'Phiếu xuất kho', 'export-create' => 'Phiếu xu�
     </aside>
     <button class="menu-backdrop" type="button" aria-label="Đóng menu" hidden></button>
     <div class="content-shell">
-        <header class="topbar"><div class="breadcrumb"><button id="menu-toggle" class="icon-button" type="button" aria-controls="sidebar" aria-expanded="false" aria-label="Mở menu"><?= $icon('menu') ?></button><span>Không gian làm việc</span><span class="breadcrumb-divider">/</span><strong><?= escapeHtml($pageTitle) ?></strong></div><div class="topbar-right"><span class="internal-badge topbar-warehouse" title="<?= escapeHtml($topbarWarehouseHint) ?>"><?= $icon((int)$user['is_super_admin'] === 1 ? 'shield' : 'warehouse') ?><span class="topbar-warehouse-text"><?= escapeHtml($topbarWarehouse) ?></span></span><button id="user-menu-toggle" class="user-menu-toggle" type="button" popovertarget="user-menu" aria-label="Tài khoản của tôi" title="Tài khoản của tôi"><span class="avatar avatar-small" data-user-initial><?= escapeHtml(mb_strtoupper(mb_substr($displayName, 0, 1))) ?></span><?= $icon('chevron') ?></button></div></header>
+        <header class="topbar"><div class="breadcrumb"><button id="menu-toggle" class="icon-button" type="button" aria-controls="sidebar" aria-expanded="false" aria-label="Mở menu"><?= $icon('menu') ?></button><span>Không gian làm việc</span><span class="breadcrumb-divider">/</span><strong><?= escapeHtml($pageTitle) ?></strong></div><div class="topbar-right"><span class="internal-badge topbar-warehouse" title="<?= escapeHtml($topbarWarehouseHint) ?>"><?= $icon((int)$user['is_super_admin'] === 1 ? 'shield' : 'warehouse') ?><span class="topbar-warehouse-text"><?= escapeHtml($topbarWarehouse) ?></span></span><button id="activity-toggle" class="icon-button activity-toggle" type="button" popovertarget="activity-panel" aria-label="Thông báo" aria-expanded="false" title="Thông báo"><?= $icon('bell') ?><span id="activity-badge" class="activity-badge" aria-hidden="true" hidden></span></button><button id="user-menu-toggle" class="user-menu-toggle" type="button" popovertarget="user-menu" aria-label="Tài khoản của tôi" title="Tài khoản của tôi"><span class="avatar avatar-small" data-user-initial><?= escapeHtml(mb_strtoupper(mb_substr($displayName, 0, 1))) ?></span><?= $icon('chevron') ?></button></div></header>
         <main id="main-content" tabindex="-1">

@@ -19,6 +19,38 @@ function userCanSignIn(?array $user): bool
         && ($user['employee_id'] === null || $user['employee_status'] === 'active');
 }
 
+function userSessionMatches(?array $user,array $session): bool
+{
+    return userCanSignIn($user) && (string)($session['user_id'] ?? '')===(string)$user['id']
+        && is_string($session['login_token'] ?? null) && strlen($session['login_token'])===64
+        && is_string($user['active_session_hash'] ?? null)
+        && hash_equals($user['active_session_hash'],hash('sha256',$session['login_token']))
+        && is_string($session['password_version'] ?? null)
+        && hash_equals(hash('sha256',$user['password_hash']),$session['password_version']);
+}
+function userCanAct(?array $user): bool
+{
+    // Trusted CLI jobs have no browser session; HTTP actors must retain the active login even under a write lock.
+    return PHP_SAPI==='cli' && !isset($_SESSION['user_id']) ? userCanSignIn($user) : userSessionMatches($user,$_SESSION ?? []);
+}
+function activateUserSession(PDO $pdo,string $userId,string $passwordVersion): string
+{
+    $pdo->beginTransaction();
+    try {
+        $stmt=$pdo->prepare('SELECT id FROM users WHERE id=? FOR UPDATE');$stmt->execute([$userId]);
+        $user=findUser($pdo,'id',$userId);
+        if(!userCanSignIn($user) || !hash_equals(hash('sha256',$user['password_hash']),$passwordVersion)) throw new DomainException('Thông tin tài khoản đã thay đổi. Vui lòng đăng nhập lại.');
+        $token=bin2hex(random_bytes(32));
+        $pdo->prepare('UPDATE users SET active_session_hash=?,updated_at=updated_at WHERE id=?')->execute([hash('sha256',$token),$userId]);
+        $pdo->commit();return $token;
+    } catch(Throwable $error) {if($pdo->inTransaction())$pdo->rollBack();throw $error;}
+}
+function revokeUserSession(PDO $pdo,string $userId,string $token): void
+{
+    // A replaced browser may log out later; revoke only its own fingerprint, never the newer login.
+    $pdo->prepare('UPDATE users SET active_session_hash=NULL,updated_at=updated_at WHERE id=? AND active_session_hash=?')->execute([$userId,hash('sha256',$token)]);
+}
+
 function warehousePermission(PDO $pdo, string $userId, string $warehouseId): ?string
 {
     $user = findUser($pdo, 'id', $userId);
@@ -35,7 +67,7 @@ function warehousePermission(PDO $pdo, string $userId, string $warehouseId): ?st
 function userAccess(PDO $pdo, string $userId): array
 {
     $user = findUser($pdo, 'id', $userId);
-    if (!userCanSignIn($user)) throw new DomainException('Tài khoản không còn quyền truy cập.');
+    if (!userCanAct($user)) throw new DomainException('Tài khoản không còn quyền truy cập hoặc phiên đăng nhập đã bị thay thế.');
     $access = ['admin'=>(int)$user['is_super_admin'] === 1, 'warehouses'=>[], 'warehouse_names'=>[]];
     if (!$access['admin']) {
         $stmt = $pdo->prepare("SELECT g.warehouse_id,g.role,w.name FROM user_warehouses g JOIN warehouses w ON w.id=g.warehouse_id WHERE g.user_id=? AND w.status='active'");
@@ -96,7 +128,7 @@ function authenticateUser(PDO $pdo, string $username, string $password, string $
             if ($statement->rowCount() === 1) $user['password_hash'] = $newHash;
         }
         $user['password_version'] = hash('sha256', $user['password_hash']);
-        unset($user['password_hash']);
+        unset($user['password_hash'],$user['active_session_hash']);
         return $user;
     } finally {
         fclose($file);

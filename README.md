@@ -425,3 +425,95 @@ Checks: `php tests/receipt-excel.php` round-trips empty/single/multiple-line XLS
 Super admins see the whole system, including receipt history in inactive warehouses. Other active users see only active warehouses currently granted to them; products are counted once from receipt history in those warehouses. No grants expose no business records. Warehouse filtering and search apply to the ten displayed recent receipts. Admin shortcuts open existing pages, and receipt links open the requested detail dialog. Reports remain explicitly labelled previews. The dashboard is read-only and requires no schema change or sample records.
 
 Checks: `php tests/home.php`, `php tests/home.php --empty`, `php tests/management.php` (isolated database counts, dates, scope and revocation), `php tests/auth.php`, `node tests/home-ui.mjs` (charts, filters, receipt links and responsive layouts).
+
+### Activity notification bell
+
+All signed-in dashboard pages have a notification bell beside the warehouse and
+account controls. It lists the latest **five unread** events, with **Hiện thêm**
+using an older-ID cursor. Receipt creation events (draft and confirmed imports or
+exports, including transfer imports) are visible only in the account's currently
+accessible active warehouses; admins see all warehouses. Clicking a receipt title
+marks it read before opening `imports&id=...` or `exports&id=...`, which opens the
+existing detail dialog. Deleted receipts remain plain history with no dead link.
+
+Administrative changes to warehouses, goods, suppliers, employees and decisions
+are broadcast to every signed-in account. They show only action/reference text,
+not private record fields or management links. Each offers **Đã xem**; receipt
+messages also offer it when users want to dismiss one without navigating. Account,
+password and grant changes do not become public announcements. Read state is
+personal, persistent across logins and idempotent; reads do not generate audits.
+Previously read messages stay out of the feed and its count, including when read
+from another tab/device. Revoked/inactive warehouse grants clear cached receipt
+messages during the next poll, and all POST read requests recheck authorization.
+
+Apply `database/2026-10-13-activity-notifications.sql` before deploying. It adds
+`audit_logs.notification_admin` (role at the time of the administrative event)
+and `notification_reads` keyed by user/audit event, with foreign keys. The local
+`qlvt-new` migration has been applied without rewriting business records. Existing
+receipt creation audits can appear as older notifications; historic administrative
+rows are not retroactively labelled as admin events. The relevant existing audit
+writers capture the administrative flag in the business transaction, so failed
+operations cannot publish notifications. Future audit writers must set this flag
+only from the authenticated actor's role for administrative catalogue operations.
+
+`GET index.php?page=notifications` serves the unread feed/count, pagination and
+currently authorized unread IDs among a bounded list of cached rows. `POST` with
+`action=read`, ID and CSRF marks one authorized notification read. Neither API
+returns raw before/after snapshots. Background polling runs every **15 seconds**,
+releases the PHP session lock early and does not extend the 30-minute idle session;
+HTTP 401 clears the client cache, stops polling and returns the browser to login. Failures retain unread data
+and provide retry instead of repeatedly producing toasts.
+
+A brief, low-volume native Web Audio tone announces new unread arrivals after the
+browser permits audio through interaction. **Âm báo: Bật/Tắt** stores a per-account
+preference in the browser. An existing unread backlog does not replay on initial
+loading; a per-tab session cursor avoids replay on navigation or repeated polling.
+No new frontend dependency, external sound file, WebSocket server or cron is needed.
+The native popover closes with Escape/outside clicks; its heading/footer stay fixed
+while the body scrolls on mobile and desktop.
+
+Validation: `php tests/management.php` (isolated DB/real notification HTTP requests,
+warehouse boundaries, admin role snapshot, pagination, independent read state,
+CSRF/revocation and idle expiry); `node tests/home-ui.mjs` (mocked notification
+transport only, read/navigation/error/sound behavior and responsive screenshots).
+
+### One active login per account
+
+Apply `database/2026-10-13-single-user-session.sql` before deploying. The local
+`qlvt-new` migration has been applied; it adds nullable `users.active_session_hash`
+without changing accounts or passwords. Existing sessions without a login token
+must sign in once again after deployment. This rule applies to admins, keepers and
+viewers. Tabs sharing the same browser cookie share one login; another browser or
+device signing in replaces that login. No IP/device fingerprint is used.
+
+After password/CSRF validation and session-ID rotation, `activateUserSession()`
+locks the account, rechecks its current status and verified password version, then
+stores a SHA-256 fingerprint of a new 32-byte random token. The raw token stays in
+the server-side PHP session. Concurrent logins serialize on that account row; the
+last committed activation wins. Verification through `authenticateUser()` alone
+(including verification of the current password during self-service changes)
+does not replace a session. Failed logins and stale credential checks leave the
+current fingerprint intact. Session activation/revocation explicitly preserve
+`users.updated_at` so login traffic does not invalidate account/profile editors.
+
+Every protected request checks account status, password version, owner and login
+fingerprint. Replaced sessions are cleared and cannot read protected pages/files
+or submit writes. Write services recheck the authenticated actor using
+`userCanAct()` after acquiring their existing transaction lock, covering requests
+that passed the outer gate before another login committed. Trusted CLI jobs keep
+their existing actor authorization. Already-running reads/downloads cannot be
+recalled; new requests require the winning token. The shared notification poll
+returns the old browser to login on its next check (normally within 15 seconds)
+without extending idle sessions. The login page explains that another login
+replaced the session.
+
+Logout revokes only a matching fingerprint, so an older device logging out cannot
+clear a newer device's login. PHP session/cookie cleanup still completes when the
+DB is unavailable. Self-service password changes keep the current login token and
+rotate session ID, CSRF and password version; other sessions remain invalid.
+
+Checks: `php tests/management.php` uses independent cookies in an isolated DB to
+verify takeover, failed login, stale logout, protected pages/files/POSTs, unchanged
+account metadata, verification-only calls, stale credentials, authorization under
+write locks, current-device logout and password changes. `node tests/home-ui.mjs`
+checks automatic login navigation when notification polling reports HTTP 401.

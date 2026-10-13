@@ -5,7 +5,7 @@ require dirname(__DIR__) . '/app/bootstrap.php';
 
 $page = is_string($_GET['page'] ?? null) ? $_GET['page'] : 'login';
 $method = $_SERVER['REQUEST_METHOD'];
-if (!in_array($page, ['login', 'home', 'profile', 'exports', 'export-create', 'export-file', 'export-excel', 'imports', 'import-create', 'import-file', 'import-image', 'import-excel', 'product-excel', 'products', 'materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products', 'accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'decision-file', 'reports', 'audit', 'logout'], true)) {
+if (!in_array($page, ['login', 'home', 'profile', 'notifications', 'exports', 'export-create', 'export-file', 'export-excel', 'imports', 'import-create', 'import-file', 'import-image', 'import-excel', 'product-excel', 'products', 'materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products', 'accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'decision-file', 'reports', 'audit', 'logout'], true)) {
     http_response_code(404);
     exit('Trang không tồn tại.');
 }
@@ -18,6 +18,10 @@ if ($page === 'logout') {
     if ($method !== 'POST' || !validCsrfToken()) {
         http_response_code(403);
         exit('Yêu cầu đăng xuất không hợp lệ.');
+    }
+    if(isset($_SESSION['user_id']) && is_string($_SESSION['login_token'] ?? null)) {
+        try {revokeUserSession(connectDatabase(),(string)$_SESSION['user_id'],$_SESSION['login_token']);}
+        catch(Throwable $error) {error_log('QLVT logout: '.$error->getMessage());}
     }
     $_SESSION = [];
     $cookie = session_get_cookie_params();
@@ -35,8 +39,9 @@ if ($page === 'login' && $method === 'POST') {
             throw new DomainException('Vui lòng kiểm tra tên đăng nhập và mật khẩu.');
         }
         $user = authenticateUser(connectDatabase(), $username, $password, $_SERVER['REMOTE_ADDR']);
-        session_regenerate_id(true);
-        $_SESSION = ['user_id' => $user['id'], 'csrf_token' => bin2hex(random_bytes(32)), 'last_activity' => time(), 'password_version' => $user['password_version']];
+        if(!session_regenerate_id(true)) throw new RuntimeException('Cannot rotate login session.');
+        $loginToken=activateUserSession(connectDatabase(),(string)$user['id'],$user['password_version']);
+        $_SESSION = ['user_id' => $user['id'], 'csrf_token' => bin2hex(random_bytes(32)), 'last_activity' => time(), 'password_version' => $user['password_version'], 'login_token'=>$loginToken];
         redirectTo('home');
     } catch (DomainException $error) {
         $_SESSION['login_error'] = $error->getMessage();
@@ -50,25 +55,40 @@ if ($page === 'login' && $method === 'POST') {
 $user = null;
 if (isset($_SESSION['user_id'])) {
     try {
+        $sessionError='Phiên đăng nhập đã kết thúc. Vui lòng đăng nhập lại.';
         if (time() - ($_SESSION['last_activity'] ?? 0) < 1800) {
             $user = findUser(connectDatabase(), 'id', $_SESSION['user_id']);
-            if ($user !== null) {
-                $passwordVersion = hash('sha256', $user['password_hash']);
-                if (!isset($_SESSION['password_version']) || !hash_equals($_SESSION['password_version'], $passwordVersion)) $user = null;
-            }
+            if ($user!==null && is_string($_SESSION['login_token'] ?? null) && is_string($user['active_session_hash'] ?? null)
+                && !hash_equals($user['active_session_hash'],hash('sha256',$_SESSION['login_token']))) $sessionError='Tài khoản đã được đăng nhập ở nơi khác. Vui lòng đăng nhập lại để sử dụng trên máy này.';
+            if(!userSessionMatches($user,$_SESSION))$user=null;
         }
         if (!userCanSignIn($user)) {
-            unset($_SESSION['user_id'], $_SESSION['last_activity']);
-            $_SESSION['login_error'] = 'Phiên đăng nhập đã kết thúc. Vui lòng đăng nhập lại.';
+            unset($_SESSION['user_id'], $_SESSION['last_activity'],$_SESSION['login_token'],$_SESSION['password_version']);
+            $_SESSION['login_error'] = $sessionError;
             $user = null;
         } else {
-            $_SESSION['last_activity'] = time();
+            if ($page !== 'notifications' || $method === 'POST') $_SESSION['last_activity'] = time();
         }
     } catch (Throwable $error) {
         error_log('QLVT session: ' . $error->getMessage());
         http_response_code(503);
         exit('Hệ thống tạm thời không khả dụng. Vui lòng thử lại sau.');
     }
+}
+if ($page === 'notifications') {
+    if ($user === null) respondJson(['ok'=>false,'message'=>$_SESSION['login_error'] ?? 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.'],401);
+    if ($method === 'POST' && !validCsrfToken()) respondJson(['ok'=>false,'message'=>'Phiên xác nhận không hợp lệ. Hãy tải lại trang.'],403);
+    session_write_close();
+    require_once dirname(__DIR__).'/app/activity-notifications.php';
+    try {
+        if ($method === 'POST') {
+            if (($_POST['action'] ?? '') !== 'read') throw new DomainException('Thao tác thông báo không hợp lệ.');
+            readActivityNotification(connectDatabase(),(string)$user['id'],$_POST['id'] ?? null);
+            respondJson(['ok'=>true]);
+        }
+        respondJson(['ok'=>true]+loadActivityNotifications(connectDatabase(),(string)$user['id'],$_GET));
+    } catch (DomainException $error) { respondJson(['ok'=>false,'message'=>$error->getMessage()],422); }
+    catch (Throwable $error) { error_log('QLVT notifications: '.$error->getMessage()); respondJson(['ok'=>false,'message'=>'Không tải được thông báo. Vui lòng thử lại.'],503); }
 }
 if ($page === 'profile') {
     if ($user === null) respondJson(['ok'=>false,'message'=>'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.'],401);

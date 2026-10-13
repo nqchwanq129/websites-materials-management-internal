@@ -68,7 +68,7 @@ function saveManagement(PDO $pdo, string $page, string $actorId, array $input, a
         // ponytail: serialize low-volume management writes by locking users; use a dedicated lock row if throughput grows.
         $pdo->query('SELECT id FROM users ORDER BY id FOR UPDATE')->fetchAll();
         $actor = findUser($pdo, 'id', $actorId);
-        if (!userCanSignIn($actor) || !(int) $actor['is_super_admin']) throw new DomainException('Bạn không có quyền thực hiện thao tác này.');
+        if (!userCanAct($actor) || !(int) $actor['is_super_admin']) throw new DomainException('Bạn không có quyền thực hiện thao tác này.');
         $before = $id ? managementSnapshot($pdo, $page, $id) : null;
         if ($id && !$before) throw new DomainException('Bản ghi không còn tồn tại.');
         if ($id && managementText($input, 'version', 32, true) !== $before['updated_at']) {
@@ -208,8 +208,8 @@ function saveManagement(PDO $pdo, string $page, string $actorId, array $input, a
             return 'Không có thông tin thay đổi.';
         }
         if ($passwordChanged) $after['password_changed'] = true;
-        $pdo->prepare("INSERT INTO audit_logs (user_id,warehouse_id,action,entity_type,entity_id,before_data,after_data,created_at)
-            VALUES (?,?,?,?,?,?,?,UTC_TIMESTAMP(6) + INTERVAL 7 HOUR)")->execute([
+        $pdo->prepare("INSERT INTO audit_logs (user_id,warehouse_id,action,entity_type,entity_id,before_data,after_data,created_at,notification_admin)
+            VALUES (?,?,?,?,?,?,?,UTC_TIMESTAMP(6) + INTERVAL 7 HOUR,1)")->execute([
                 $actorId, $page === 'warehouses' ? ($action === 'delete' ? null : $id) : ($page === 'employees' ? ($after['warehouse_id'] ?? $before['warehouse_id']) : null), $auditAction,
                 $page === 'accounts' ? 'users' : $page, $id,
                 $before === null ? null : json_encode($before, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),

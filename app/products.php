@@ -74,7 +74,7 @@ function saveProduct(PDO $pdo, string $actorId, array $input, string $category =
     try {
         $pdo->query('SELECT id FROM users ORDER BY id FOR UPDATE')->fetchAll();
         $actor = findUser($pdo, 'id', $actorId);
-        if (!userCanSignIn($actor) || !(int) $actor['is_super_admin']) throw new DomainException('Bạn không có quyền sửa hàng hóa.');
+        if (!userCanAct($actor) || !(int) $actor['is_super_admin']) throw new DomainException('Bạn không có quyền sửa hàng hóa.');
         $stmt = $pdo->prepare('SELECT id,code,name,category,unit,tracking_mode,status,updated_at FROM products WHERE id=? FOR UPDATE');
         $stmt->execute([$id]); $before = $stmt->fetch();
         if (!$before || managementText($input, 'version', 32, true) !== $before['updated_at']) throw new DomainException('Hàng hóa đã thay đổi. Hãy tải lại trang trước khi sửa.');
@@ -86,7 +86,7 @@ function saveProduct(PDO $pdo, string $actorId, array $input, string $category =
         unset($before['updated_at']);
         if ($before !== $after) {
             $pdo->prepare('UPDATE products SET code=?,name=?,category=?,unit=?,tracking_mode=?,status=?,updated_at=GREATEST(CURRENT_TIMESTAMP(6),updated_at + INTERVAL 1 MICROSECOND) WHERE id=?')->execute([...array_values($values), $id]);
-            $pdo->prepare("INSERT INTO audit_logs (user_id,action,entity_type,entity_id,before_data,after_data,created_at) VALUES (?,'update','products',?,?,?,UTC_TIMESTAMP(6) + INTERVAL 7 HOUR)")->execute([$actorId, $id, json_encode($before, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR), json_encode($after, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)]);
+            $pdo->prepare("INSERT INTO audit_logs (user_id,action,entity_type,entity_id,before_data,after_data,created_at,notification_admin) VALUES (?,'update','products',?,?,?,UTC_TIMESTAMP(6) + INTERVAL 7 HOUR,1)")->execute([$actorId, $id, json_encode($before, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR), json_encode($after, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)]);
         }
         $pdo->commit(); return 'Đã lưu thông tin hàng hóa và nhật ký thay đổi.';
     } catch (Throwable $error) {

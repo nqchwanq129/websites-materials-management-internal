@@ -108,16 +108,16 @@ function saveImport(PDO $pdo, string $actorId, array $input, array $files = []):
     try {
         $pdo->query('SELECT id FROM users ORDER BY id FOR UPDATE')->fetchAll();
         $actor = findUser($pdo, 'id', $actorId);
-        if (!userCanSignIn($actor) || warehousePermission($pdo, $actorId, $warehouse) !== 'keeper') throw new DomainException('Bạn không có quyền nhập vào kho này hoặc kho đã ngừng hoạt động.');
+        if (!userCanAct($actor) || warehousePermission($pdo, $actorId, $warehouse) !== 'keeper') throw new DomainException('Bạn không có quyền nhập vào kho này hoặc kho đã ngừng hoạt động.');
         $access = userAccess($pdo, $actorId);
         $catalogueIds = $access['admin'] ? null : array_fill_keys(array_column(loadProducts($pdo, '', $access), 'id'), true);
         if ($supplierId !== null && !$access['admin']) {
             $supplierIds = array_column(loadImports($pdo, $access), 'supplier_id');
             if (!in_array($supplierId, array_map('strval', $supplierIds), true)) throw new DomainException('Nhà cung cấp không thuộc phạm vi kho được cấp quyền.');
         }
-        $audit = static function (string $entity, string $id, array $data) use ($pdo, $actorId, $warehouse): void {
-            $pdo->prepare("INSERT INTO audit_logs (user_id,warehouse_id,action,entity_type,entity_id,after_data,created_at) VALUES (?,?,'create',?,?,?,UTC_TIMESTAMP(6) + INTERVAL 7 HOUR)")
-                ->execute([$actorId, $warehouse, $entity, $id, json_encode($data, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)]);
+        $audit = static function (string $entity, string $id, array $data) use ($pdo, $actorId, $warehouse, $access): void {
+            $pdo->prepare("INSERT INTO audit_logs (user_id,warehouse_id,action,entity_type,entity_id,after_data,created_at,notification_admin) VALUES (?,?,'create',?,?,?,UTC_TIMESTAMP(6) + INTERVAL 7 HOUR,?)")
+                ->execute([$actorId, $warehouse, $entity, $id, json_encode($data, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR), (int)$access['admin']]);
         };
         if ($supplierId !== null) {
             $stmt = $pdo->prepare('SELECT * FROM suppliers WHERE id=? FOR UPDATE'); $stmt->execute([$supplierId]); $supplier = $stmt->fetch();
@@ -203,8 +203,8 @@ function saveImport(PDO $pdo, string $actorId, array $input, array $files = []):
         $printSnapshot = receiptPrintSnapshot($pdo, $warehouse, $actorId, $input);
         foreach ($categoryChanges as $productId=>[$before,$after]) {
             $pdo->prepare('UPDATE products SET category=?,updated_at=GREATEST(CURRENT_TIMESTAMP(6),updated_at + INTERVAL 1 MICROSECOND) WHERE id=?')->execute([$after['category'],$productId]);
-            $pdo->prepare("INSERT INTO audit_logs (user_id,warehouse_id,action,entity_type,entity_id,before_data,after_data,created_at) VALUES (?,?,'update','products',?,?,?,UTC_TIMESTAMP(6) + INTERVAL 7 HOUR)")
-                ->execute([$actorId,$warehouse,$productId,json_encode($before,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR),json_encode($after,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR)]);
+            $pdo->prepare("INSERT INTO audit_logs (user_id,warehouse_id,action,entity_type,entity_id,before_data,after_data,created_at,notification_admin) VALUES (?,?,'update','products',?,?,?,UTC_TIMESTAMP(6) + INTERVAL 7 HOUR,?)")
+                ->execute([$actorId,$warehouse,$productId,json_encode($before,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR),json_encode($after,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR),(int)$access['admin']]);
         }
         $header = [$warehouse, $number, $date, $type, $supplierId, $supplierName ?: null, $invoice ?: null, $series ?: null, $invoiceDate, $sender ?: null, $beforeTax, $afterTax, $status, $actorId, json_encode($printSnapshot,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR)];
         $pdo->prepare('INSERT INTO import_bill (warehouse_id,number,received_date,receipt_type,supplier_id,supplier_name,invoice_number,invoice_series,invoice_date,sender_name,total_before_tax,total_after_tax,status,created_by,print_snapshot) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')->execute($header);
@@ -243,7 +243,7 @@ function updateImport(PDO $pdo, string $actorId, array $input): string
         $pdo->query('SELECT id FROM users ORDER BY id FOR UPDATE')->fetchAll();
         $actor = findUser($pdo, 'id', $actorId);
         $stmt = $pdo->prepare('SELECT * FROM import_bill WHERE id=? FOR UPDATE'); $stmt->execute([$id]); $bill = $stmt->fetch();
-        if (!$bill || !userCanSignIn($actor) || warehousePermission($pdo, $actorId, (string)$bill['warehouse_id']) !== 'keeper') throw new DomainException('Phiếu không tồn tại hoặc bạn không có quyền sửa tại kho này.');
+        if (!$bill || !userCanAct($actor) || warehousePermission($pdo, $actorId, (string)$bill['warehouse_id']) !== 'keeper') throw new DomainException('Phiếu không tồn tại hoặc bạn không có quyền sửa tại kho này.');
         if ($bill['status'] === 'cancelled') throw new DomainException('Phiếu đã hủy chỉ được tra cứu.');
         $stmt = $pdo->prepare('SELECT d.*,p.tracking_mode,p.category,p.unit AS catalogue_unit, EXISTS(SELECT 1 FROM export_bill_details e WHERE e.source_import_detail_id=d.id) AS stock_locked
             FROM import_bill_details d LEFT JOIN products p ON p.id=d.product_id WHERE d.import_bill_id=? ORDER BY d.id FOR UPDATE');
@@ -320,7 +320,7 @@ function changeImportState(PDO $pdo, string $actorId, array $input): string
         $pdo->query('SELECT id FROM users ORDER BY id FOR UPDATE')->fetchAll();
         $actor = findUser($pdo, 'id', $actorId);
         $stmt = $pdo->prepare('SELECT * FROM import_bill WHERE id=? FOR UPDATE'); $stmt->execute([$id]); $bill = $stmt->fetch();
-        if (!$bill || !userCanSignIn($actor) || warehousePermission($pdo, $actorId, (string)$bill['warehouse_id']) !== 'keeper') throw new DomainException('Phiếu không tồn tại hoặc bạn không có quyền tại kho này.');
+        if (!$bill || !userCanAct($actor) || warehousePermission($pdo, $actorId, (string)$bill['warehouse_id']) !== 'keeper') throw new DomainException('Phiếu không tồn tại hoặc bạn không có quyền tại kho này.');
         $stmt = $pdo->prepare('SELECT d.*,EXISTS(SELECT 1 FROM export_bill_details e WHERE e.source_import_detail_id=d.id) AS stock_locked
             FROM import_bill_details d WHERE d.import_bill_id=? ORDER BY d.id FOR UPDATE'); $stmt->execute([$id]); $items = $stmt->fetchAll();
         if (managementText($input, 'version', 64, true) !== importVersion($bill, $items)) throw new DomainException('Phiếu hoặc quyết định liên kết đã thay đổi. Hãy tải lại trang trước khi thực hiện.');

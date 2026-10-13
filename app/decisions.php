@@ -46,7 +46,7 @@ function saveDecision(PDO $pdo, string $actorId, array $input, array $files): st
         // Same low-volume write lock as account/employee management.
         $pdo->query('SELECT id FROM users ORDER BY id FOR UPDATE')->fetchAll();
         $actor = findUser($pdo, 'id', $actorId);
-        if (!userCanSignIn($actor)) throw new DomainException('Bạn không có quyền thực hiện thao tác này.');
+        if (!userCanAct($actor)) throw new DomainException('Bạn không có quyền thực hiện thao tác này.');
         $before = $id ? decisionSnapshot($pdo, $id) : null;
         if (!(int)$actor['is_super_admin']) {
             if (!$before || warehousePermission($pdo, $actorId, (string)$before['warehouse_id']) !== 'keeper'
@@ -103,9 +103,9 @@ function saveDecision(PDO $pdo, string $actorId, array $input, array $files): st
         $stored = storeAttachment($pdo, $pdf, 'decision_id', $id, $actorId);
         $after = decisionSnapshot($pdo, $id);
         unset($before['updated_at'], $after['updated_at']);
-        if ($before !== $after) $pdo->prepare("INSERT INTO audit_logs (user_id,warehouse_id,action,entity_type,entity_id,before_data,after_data,created_at) VALUES (?,?,?,'decisions',?,?,?,UTC_TIMESTAMP(6) + INTERVAL 7 HOUR)")
+        if ($before !== $after) $pdo->prepare("INSERT INTO audit_logs (user_id,warehouse_id,action,entity_type,entity_id,before_data,after_data,created_at,notification_admin) VALUES (?,?,?,'decisions',?,?,?,UTC_TIMESTAMP(6) + INTERVAL 7 HOUR,?)")
             ->execute([$actorId, $warehouse, $before === null ? 'create' : 'update', $id,
-                $before === null ? null : json_encode($before, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR), json_encode($after, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)]);
+                $before === null ? null : json_encode($before, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR), json_encode($after, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR), (int)$actor['is_super_admin']]);
         $pdo->commit();
         return 'Đã lưu quyết định, liên kết hàng hóa và file đính kèm.';
     } catch (Throwable $error) {

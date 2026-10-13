@@ -7,6 +7,7 @@ require dirname(__DIR__) . '/app/management.php';
 require dirname(__DIR__) . '/app/dashboard.php';
 require dirname(__DIR__) . '/app/reports.php';
 require dirname(__DIR__) . '/app/stock-book-excel.php';
+require dirname(__DIR__) . '/app/activity-notifications.php';
 require dirname(__DIR__) . '/app/profile.php';
 require dirname(__DIR__) . '/vendor/autoload.php';
 function verify(bool $value, string $message): void { if (!$value) throw new RuntimeException($message); }
@@ -124,6 +125,36 @@ try {
     verify(httpManagement('login', ['username' => $prefix, 'password' => $password, 'csrf_token' => tokenFrom($body)])[0] === 303, 'Test login failed.');
     [, $body] = httpManagement('employees');
     $csrf = tokenFrom($body);
+    // Independent cookies model separate browsers/devices; the latest successful login must win.
+    $machineA=$cookie;$machineACsrf=$csrf;$sessionUser=findUser($pdo,'id',$actorId);$hashA=$sessionUser['active_session_hash'];$accountVersion=$sessionUser['updated_at'];
+    $sessionA=file_get_contents($testRoot.'/storage/sess_'.substr($machineA,strlen('qlvt_session=')));preg_match('/login_token\|s:64:"([a-f0-9]{64})";/',$sessionA,$rawA);
+    verify(isset($rawA[1]) && hash_equals($hashA,hash('sha256',$rawA[1])) && $hashA!==$rawA[1],'The database must store only the fingerprint of the random session token.');
+    $cookie='';[, $loginBody]=httpManagement('login');$loginCsrf=tokenFrom($loginBody);
+    verify(httpManagement('login',['csrf_token'=>$loginCsrf,'username'=>$prefix,'password'=>'wrong-password'])[0]===303 && findUser($pdo,'id',$actorId)['active_session_hash']===$hashA,'Failed logins must not invalidate the current device.');
+    $cookie=$machineA;verify(httpManagement('home')[0]===200,'The original device must remain active after a failed login.');
+    $cookie='';[, $loginBody]=httpManagement('login');verify(httpManagement('login',['csrf_token'=>tokenFrom($loginBody),'username'=>$prefix,'password'=>$password])[0]===303,'Second device login failed.');
+    $machineB=$cookie;[, $machineBHome]=httpManagement('home');$machineBCsrf=tokenFrom($machineBHome);$hashB=findUser($pdo,'id',$actorId)['active_session_hash'];
+    verify($hashB!==$hashA && findUser($pdo,'id',$actorId)['updated_at']===$accountVersion,'A second login must replace the fingerprint without changing account metadata versions.');
+    $cookie=$machineA;verify(httpManagement('logout',['csrf_token'=>$machineACsrf])[0]===303 && findUser($pdo,'id',$actorId)['active_session_hash']===$hashB,'Logging out a replaced browser must not revoke the newer device.');
+    $cookie=$machineB;verify(httpManagement('home')[0]===200,'The newer device must survive stale-browser logout.');
+    $cookie='';[, $loginBody]=httpManagement('login');verify(httpManagement('login',['csrf_token'=>tokenFrom($loginBody),'username'=>$prefix,'password'=>$password])[0]===303,'Third device login failed.');$machineC=$cookie;
+    $cookie=$machineB;[$oldStatus,$oldBody]=httpManagement('notifications');verify($oldStatus===401 && str_contains($oldBody,'nơi khác'),'The replaced device must receive an explicit session-replaced response.');
+    foreach(['home','imports','exports','accounts','import-excel&id=1','import-file&id=1'] as $route)verify(httpManagement($route)[0]===303,'A replaced device must lose all page/file access: '.$route);
+    verify(httpManagement('warehouses',['csrf_token'=>$machineBCsrf,'action'=>'save','code'=>'SHOULD-NOT-WRITE','name'=>'Stale browser','status'=>'active'])[0]===401,'A replaced device must not submit mutations with its old CSRF token.');
+    $cookie=$machineC;verify(httpManagement('home')[0]===200,'The latest login must remain valid.');
+    $currentSessionUser=findUser($pdo,'id',$actorId);$currentFingerprint=$currentSessionUser['active_session_hash'];
+    authenticateUser($pdo,$prefix,$password,'session-verification-check',false);
+    verify(findUser($pdo,'id',$actorId)['active_session_hash']===$currentFingerprint,'Password verification alone must never activate a new session.');
+    rejected(fn()=>activateUserSession($pdo,$actorId,str_repeat('0',64)));
+    verify(findUser($pdo,'id',$actorId)['active_session_hash']===$currentFingerprint,'Stale credential verification must not replace a valid login.');
+    $_SESSION=['user_id'=>$actorId,'login_token'=>$rawA[1],'password_version'=>hash('sha256',$currentSessionUser['password_hash'])];
+    try{rejected(fn()=>saveManagement($pdo,'employees',$actorId,['action'=>'save','code'=>'STALE-INFLIGHT','full_name'=>'Stale request','email'=>'','phone'=>'','warehouse'=>$warehouseIds[0],'status'=>'active']));}
+    finally{unset($_SESSION);}
+    verify(!(int)$pdo->query("SELECT COUNT(*) FROM employees WHERE code='STALE-INFLIGHT'")->fetchColumn(),'Actor authorization must recheck the session under the transaction lock.');
+    $cookie='';[, $loginBody]=httpManagement('login');verify(httpManagement('login',['csrf_token'=>tokenFrom($loginBody),'username'=>$prefix,'password'=>$password])[0]===303,'Logout verification device login failed.');$logoutDevice=$cookie;[, $logoutHome]=httpManagement('home');
+    verify(httpManagement('logout',['csrf_token'=>tokenFrom($logoutHome)])[0]===303 && findUser($pdo,'id',$actorId)['active_session_hash']===null,'Logging out the current device must clear its fingerprint.');
+    $cookie=$logoutDevice;verify(httpManagement('notifications')[0]===401,'A logged-out cookie must not remain authorized.');
+    $cookie='';[, $loginBody]=httpManagement('login');verify(httpManagement('login',['csrf_token'=>tokenFrom($loginBody),'username'=>$prefix,'password'=>$password])[0]===303,'Main test session restore failed.');[, $body]=httpManagement('employees');$csrf=tokenFrom($body);
     $employeeInput = ['csrf_token' => $csrf, 'action' => 'save', 'code' => $prefix, 'full_name' => 'Người thử <script>',
         'email' => 'test@example.com', 'phone' => '', 'warehouse' => $warehouseIds[0], 'status' => 'active'];
     verify(httpManagement('employees', array_diff_key($employeeInput, ['csrf_token' => true]))[0] === 403, 'CSRF bypass.');
@@ -1146,6 +1177,49 @@ try {
     $confirmationRollbackCreate=$categoryCreate;$confirmationRollbackCreate['number']='ROLLBACK-CONFIRM';$categoryItem['version']=$pdo->query('SELECT updated_at FROM products WHERE id='.$categoryProduct)->fetchColumn();$confirmationRollbackCreate['items']=json_encode([$categoryItem]);
     verify(httpManagement('import-create',$confirmationRollbackCreate)[0]===200,'Rollback confirmation fixture failed.');
     $confirmationRollbackBill=array_values(array_filter(loadImports($pdo),static fn($row)=>$row['number']==='ROLLBACK-CONFIRM'))[0];
+    $noticeUsers=[];
+    foreach(['A','B'] as $key){$pdo->prepare('INSERT INTO users (username,password_hash,is_super_admin) VALUES (?,?,0)')->execute([$prefix.'-notice-'.$key,password_hash($password,PASSWORD_DEFAULT)]);$noticeUsers[$key]=$pdo->lastInsertId();$pdo->prepare("INSERT INTO user_warehouses (user_id,warehouse_id,role) VALUES (?,?,'viewer')")->execute([$noticeUsers[$key],$warehouseIds[$key==='A'?0:1]]);}
+    verify(httpManagement('warehouses',['csrf_token'=>$csrf,'action'=>'save','code'=>'NOTICE-GLOBAL','name'=>'Kho <script> mới','address'=>'Address','status'=>'active'])[0]===200,'Admin warehouse notification publisher failed.');
+    foreach(['warehouses','products','suppliers','employees','decisions'] as $entity){$stmt=$pdo->prepare('SELECT COUNT(*) FROM audit_logs WHERE entity_type=? AND notification_admin=1');$stmt->execute([$entity]);verify((int)$stmt->fetchColumn()>0,'Admin catalogue operations must snapshot the notification role: '.$entity);}
+    $noticeIds=['A'=>[],'B'=>[]];
+    foreach(['A'=>8,'B'=>1] as $key=>$count)for($i=0;$i<$count;$i++){
+        $noticeItem=['product_id'=>$categoryProduct,'version'=>$pdo->query('SELECT updated_at FROM products WHERE id='.$categoryProduct)->fetchColumn(),'quantity'=>'1','unit_price'=>'1','tax_code'=>'KCT'];
+        verify(httpManagement('import-create',['csrf_token'=>$csrf,'action'=>'create','warehouse'=>$warehouseIds[$key==='A'?0:1],'number'=>'NOTICE-'.$key.'-'.$i,'received_date'=>'2026-10-13','receipt_type'=>'opening','status'=>'draft','items'=>json_encode([$noticeItem])])[0]===200,'Receipt notification publisher failed.');
+        $noticeIds[$key][]=(string)$pdo->query("SELECT id FROM audit_logs WHERE entity_type='import_bill' AND action='create' ORDER BY id DESC LIMIT 1")->fetchColumn();
+    }
+    $collectNotices=static function(string $user)use($pdo):array{$items=[];$before=null;do{$feed=loadActivityNotifications($pdo,$user,['before'=>$before]);$items=[...$items,...$feed['items']];$before=$feed['next_before'];}while($before!==null);return $items;};
+    $allA=$collectNotices($noticeUsers['A']);$allB=$collectNotices($noticeUsers['B']);$idsA=array_column($allA,'id');$idsB=array_column($allB,'id');
+    verify(count(array_intersect($noticeIds['A'],$idsA))===8 && !array_intersect($noticeIds['B'],$idsA) && !array_intersect($noticeIds['A'],$idsB) && count(array_intersect($noticeIds['B'],$idsB))===1,'Receipt notifications must follow each viewer warehouse and support older pages.');
+    $firstFeed=loadActivityNotifications($pdo,$noticeUsers['A']);verify(count($firstFeed['items'])===5 && $firstFeed['next_before']!==null && $firstFeed['unread_count']===count($allA),'The initial feed must show five latest unread records and an accurate count.');
+    verify(count(array_unique($idsA))===count($idsA),'Older notification pages must not repeat rows.');
+    $global=array_values(array_filter($allA,static fn($row)=>str_contains($row['title'],'Kho <script> mới')))[0];
+    verify($global['kind']==='admin' && $global['href']===null && in_array($global['id'],$idsB,true),'Admin notifications must be global and never navigate to management pages.');
+    $receiptNotice=array_values(array_filter($allA,static fn($row)=>$row['id']===$noticeIds['A'][0]))[0];
+    verify(str_starts_with($receiptNotice['href'],'index.php?page=imports&id='),'Receipt notices must point to the exact receipt detail route.');
+    $exportNotices=array_filter($allA,static fn($row)=>str_contains($row['href'] ?? '','page=exports&id='));verify((bool)$exportNotices,'Export creation must generate linked warehouse notifications too.');
+    $pdo->prepare('UPDATE users SET is_super_admin=1 WHERE id=?')->execute([$rbacUserId]);
+    verify(array_column($collectNotices($noticeUsers['A']),'id')===$idsA,'Promoting a former keeper must not turn old keeper catalogue edits into global admin announcements.');
+    $pdo->prepare('UPDATE users SET is_super_admin=0 WHERE id=?')->execute([$rbacUserId]);
+    $cookie='';verify(httpManagement('notifications')[0]===401,'Anonymous notification requests must return JSON 401.');
+    [, $loginBody]=httpManagement('login');verify(httpManagement('login',['csrf_token'=>tokenFrom($loginBody),'username'=>$prefix.'-notice-A','password'=>$password])[0]===303,'Notification viewer login failed.');
+    [, $noticeHome]=httpManagement('home');$noticeCsrf=tokenFrom($noticeHome);$noticeCookie=$cookie;
+    $sessionPath=$testRoot.'/storage/sess_'.substr($noticeCookie,strlen('qlvt_session='));$sessionText=file_get_contents($sessionPath);$oldActivity=time()-60;
+    file_put_contents($sessionPath,preg_replace('/last_activity\|i:[0-9]+;/','last_activity|i:'.$oldActivity.';',$sessionText));
+    [$status,$noticeBody]=httpManagement('notifications');verify($status===200 && json_decode($noticeBody,true)['unread_count']===count($allA),'Viewer notification HTTP feed failed.');
+    verify(str_contains(file_get_contents($sessionPath),'last_activity|i:'.$oldActivity.';'),'Background polling must not extend an idle login session.');
+    verify(httpManagement('notifications',['action'=>'read','id'=>$global['id'],'csrf_token'=>'bad'])[0]===403,'Notification reads must enforce CSRF.');
+    verify(httpManagement('notifications',['action'=>'read','id'=>$noticeIds['B'][0],'csrf_token'=>$noticeCsrf])[0]===422,'Forged foreign notification IDs must not be marked read.');
+    $auditBeforeReads=(int)$pdo->query('SELECT COUNT(*) FROM audit_logs')->fetchColumn();
+    foreach([1,2] as $_)verify(httpManagement('notifications',['action'=>'read','id'=>$global['id'],'csrf_token'=>$noticeCsrf])[0]===200,'Reading a global notice must be allowed and idempotent.');
+    $afterRead=loadActivityNotifications($pdo,$noticeUsers['A'],['known'=>[$global['id'],$noticeIds['A'][0],$noticeIds['B'][0]]]);
+    verify($afterRead['unread_count']===count($allA)-1 && $afterRead['alive_ids']===[$noticeIds['A'][0]] && !in_array($global['id'],array_column($collectNotices($noticeUsers['A']),'id'),true),'Read notifications must stay hidden and cached foreign/read IDs must be removed.');
+    verify(in_array($global['id'],array_column($collectNotices($noticeUsers['B']),'id'),true) && (int)$pdo->query('SELECT COUNT(*) FROM audit_logs')->fetchColumn()===$auditBeforeReads,'Read state must be personal and must not create new audit/notification events.');
+    $pdo->prepare('DELETE FROM user_warehouses WHERE user_id=?')->execute([$noticeUsers['A']]);
+    $revoked=loadActivityNotifications($pdo,$noticeUsers['A'],['known'=>[$noticeIds['A'][0]]]);verify($revoked['scope']!==$firstFeed['scope'] && $revoked['alive_ids']===[] && !array_filter($collectNotices($noticeUsers['A']),static fn($row)=>$row['kind']==='receipt'),'Revoked warehouse grants must remove even cached receipt notifications while retaining global news.');
+    verify(httpManagement('notifications',['action'=>'read','id'=>$noticeIds['A'][0],'csrf_token'=>$noticeCsrf])[0]===422,'Read access must recheck revocation at POST time.');
+    $sessionText=file_get_contents($sessionPath);file_put_contents($sessionPath,preg_replace('/last_activity\|i:[0-9]+;/','last_activity|i:'.(time()-1801).';',$sessionText));
+    verify(httpManagement('notifications')[0]===401,'Polling must stop serving data after idle expiry.');
+    $cookie=$adminCookie;
     $pdo->prepare('UPDATE employees SET status=? WHERE id=?')->execute(['inactive',$printEmployeeId]);
     $printImport['print_version']=loadManagement($pdo,'import-create')['printVersions'][$printWarehouseId];
     verify(httpManagement('import-create',$printImport)[0]===422,'New receipts must reject an inactive default signer.');

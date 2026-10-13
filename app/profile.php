@@ -56,7 +56,7 @@ function saveOwnProfile(PDO $pdo, string $userId, array $input, string $address)
         // ponytail: share management's users lock; narrow both write paths together if management traffic grows.
         $pdo->query('SELECT id FROM users ORDER BY id FOR UPDATE')->fetchAll();
         $account = findUser($pdo, 'id', $userId);
-        if (!userCanSignIn($account)) throw new DomainException('Tài khoản không còn được phép truy cập.');
+        if (!userCanAct($account)) throw new DomainException('Tài khoản không còn được phép truy cập.');
         if ($account['employee_id'] !== null) {
             $statement = $pdo->prepare('SELECT id FROM employees WHERE id=? FOR UPDATE');
             $statement->execute([$account['employee_id']]);

@@ -3,7 +3,7 @@ declare(strict_types=1);
 require dirname(__DIR__) . '/app/auth.php';
 // Render the dashboard without any database connection: php tests/home.php [--render].
 function escapeHtml(string $value): string { return htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); }
-$user = ['username' => 'preview-admin', 'full_name' => 'Quản trị viên <script>', 'is_super_admin' => 1];
+$user = ['id'=>'1', 'username' => 'preview-admin', 'full_name' => 'Quản trị viên <script>', 'is_super_admin' => 1];
 if(in_array('--warehouse-label',$argv,true)) $user['is_super_admin']=0;
 $user['employee_warehouse_name']='Kho Hải Phòng <script> với tên dài để kiểm tra giao diện';
 $rolePreview = in_array('--keeper',$argv,true) ? 'keeper' : (in_array('--viewer',$argv,true) || in_array('--warehouse-label',$argv,true) ? 'viewer' : '');
