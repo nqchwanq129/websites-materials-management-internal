@@ -129,7 +129,7 @@ if (in_array($page, ['home', 'exports', 'export-create', 'export-file', 'export-
     if ($page === 'home' && $method === 'POST') { header('Allow: GET'); respondJson(['ok'=>false,'message'=>'Tổng quan chỉ hỗ trợ tra cứu.'],405); }
     if ($page !== 'home' && $method === 'POST') {
         if ($page === 'reports') { header('Allow: GET'); respondJson(['ok' => false, 'message' => 'Báo cáo chỉ hỗ trợ tra cứu.'], 405); }
-        if ($page === 'exports' || ($page === 'imports' && !in_array($_POST['action'] ?? '', ['update','delete','cancel','confirm'], true))) { header('Allow: GET'); respondJson(['ok' => false, 'message' => 'Thao tác phiếu không được hỗ trợ.'], 405); }
+        if (($page === 'exports' && ($_POST['action'] ?? '') !== 'confirm') || ($page === 'imports' && !in_array($_POST['action'] ?? '', ['update','delete','cancel','confirm'], true))) { header('Allow: GET'); respondJson(['ok' => false, 'message' => 'Thao tác phiếu không được hỗ trợ.'], 405); }
         if ($page === 'audit') { header('Allow: GET'); respondJson(['ok' => false, 'message' => 'Nhật ký chỉ được đọc.'], 405); }
         if (in_array($page, ['decision-file', 'import-file', 'import-image', 'export-file', 'import-excel', 'export-excel', 'product-excel'], true)) { header('Allow: GET'); respondJson(['ok' => false, 'message' => 'Chỉ hỗ trợ tải file.'], 405); }
         if ($page === 'suppliers') { header('Allow: GET'); respondJson(['ok' => false, 'message' => 'Thông tin nhà cung cấp được cập nhật từ phiếu nhập kho.'], 405); }

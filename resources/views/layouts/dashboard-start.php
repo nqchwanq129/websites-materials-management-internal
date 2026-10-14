@@ -84,7 +84,7 @@ $openGroup = ['exports' => 'Xuất hàng hóa', 'export-create' => 'Xuất hàng
 <a class="skip-link" href="#main-content">Đến nội dung chính</a>
 <div class="app-shell">
     <aside class="sidebar" id="sidebar" aria-label="Menu chính">
-        <div class="sidebar-brand"><a class="brand" href="index.php?page=home" aria-label="VISHIPEL — Trang chủ"><span class="brand-logo"><img src="assets/images/company-logo.png" alt="VISHIPEL" width="500" height="500"></span><span class="brand-copy"><small>HỆ THỐNG QUẢN LÝ</small><strong>Vật tư &amp; kho hàng</strong></span></a><button class="icon-button sidebar-close" type="button" aria-label="Đóng menu"><?= $icon('close') ?></button></div>
+        <div class="sidebar-brand"><a class="brand" href="index.php?page=home" aria-label="VISHIPEL — Trang chủ"><span class="brand-logo"><img src="assets/images/company-logo.png" alt="VISHIPEL" width="500" height="500"></span><span class="brand-copy"><strong>PHẦN MỀM QUẢN LÝ KHO VISHIPEL</strong><small>CÔNG TY TNHH MTV THÔNG TIN ĐIỆN TỬ HÀNG HẢI VIỆT NAM</small></span></a><button class="icon-button sidebar-close" type="button" aria-label="Đóng menu"><?= $icon('close') ?></button></div>
         <label class="sidebar-search"><?= $icon('search') ?><input id="navigation-search" type="search" placeholder="Tìm kiếm" aria-label="Tìm kiếm chức năng" aria-keyshortcuts="Control+/ Meta+/"><kbd>Ctrl + /</kbd></label>
         <nav class="navigation" aria-label="Điều hướng chính">
         <a class="nav-item<?= $activePage === 'home' ? ' active' : '' ?>" href="index.php?page=home#overview"<?= $activePage === 'home' ? ' aria-current="page"' : '' ?> data-nav-home><?= $icon('grid') ?><span>Tổng quan</span></a>

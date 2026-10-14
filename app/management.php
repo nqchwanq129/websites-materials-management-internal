@@ -55,6 +55,7 @@ function saveManagement(PDO $pdo, string $page, string $actorId, array $input, a
 {
     if ($page === 'import-create') return saveImport($pdo, $actorId, $input, $files);
     if ($page === 'imports') return ($input['action'] ?? '') === 'update' ? updateImport($pdo, $actorId, $input) : changeImportState($pdo, $actorId, $input);
+    if ($page === 'exports') return confirmExport($pdo, $actorId, $input);
     if ($page === 'export-create') return saveExport($pdo, $actorId, $input, $files);
     if ($page === 'decisions') return saveDecision($pdo, $actorId, $input, $files);
     if (array_key_exists($page, productPages())) return saveProduct($pdo, $actorId, $input, productPages()[$page]);

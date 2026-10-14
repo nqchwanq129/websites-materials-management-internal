@@ -75,6 +75,8 @@ try {
     assert.ok(ready, 'Login page failed to load.');
     assert.equal(await evaluate('document.querySelectorAll(".login-layout img").length'), 1, 'Show the VISHIPEL logo only on the left.');
     assert.equal(await evaluate('document.querySelector(".brand img").complete && document.querySelector(".brand img").naturalWidth > 0'), true, 'VISHIPEL logo failed to load.');
+    assert.equal(await evaluate('document.querySelector(".brand-title").textContent'),'PHẦN MỀM QUẢN LÝ KHO VISHIPEL');
+    assert.equal(await evaluate('document.querySelector(".brand-company").textContent'),'CÔNG TY TNHH MTV THÔNG TIN ĐIỆN TỬ HÀNG HẢI VIỆT NAM');
     const screenshot = async name => {
         const { data } = await page('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
         writeFileSync(join(outputDir, name), Buffer.from(data, 'base64'));
@@ -125,7 +127,7 @@ try {
             await evaluate(`document.getElementById('login-notice').hidden=${!noticeVisible}`);
             assert.equal(await evaluate('Math.abs(document.querySelector(".brand").getBoundingClientRect().left - document.getElementById("username").getBoundingClientRect().left) < 1'), true, 'Align the logo with the login form.');
             assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth && document.documentElement.scrollHeight <= innerHeight'), true, `Page must not scroll at ${width}x${height}, notice=${noticeVisible}.`);
-            assert.deepEqual(await evaluate(`[...document.querySelectorAll('.brand,#login-title,#username,#password,#password-toggle,#help-open,#login-form button[type=submit],#support-open${noticeVisible ? ',#login-notice' : ''}')].filter(element => {
+            assert.deepEqual(await evaluate(`[...document.querySelectorAll('.brand,.brand-title,.brand-company,#login-title,#username,#password,#password-toggle,#help-open,#login-form button[type=submit],#support-open${noticeVisible ? ',#login-notice' : ''}')].filter(element => {
                 const rect = element.getBoundingClientRect();
                 return rect.width <= 0 || rect.height <= 0 || rect.top < 0 || rect.left < 0 || rect.bottom > innerHeight || rect.right > innerWidth;
             }).map(element => element.id || element.className)`), [], `Content must remain visible at ${width}x${height}, notice=${noticeVisible}.`);

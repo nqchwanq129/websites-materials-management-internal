@@ -39,7 +39,16 @@ try {
             checkReceipt($sheet->getCell('A1')->getValue() === "Đơn vị:\nĐơn vị thử\nBộ phận:\nBộ phận thử" && $sheet->getCell('F4')->getValue() === 'Địa chỉ bộ phận: Địa chỉ thử', 'Department metadata must replace the fixed template text.');
             checkReceipt($sheet->getCell('F6')->getValue() === 'Địa điểm: Ngăn A' && str_ends_with($sheet->getCell('A6')->getValue(),'Tên kho lúc lập'), 'Warehouse location/name must use the saved snapshot.');
             foreach (['D'=>'Thủ kho thử','F'=>'=SUM(1,2)','H'=>'Giám đốc thử'] as $column=>$name) checkReceipt($sheet->getCell($column.($total+13))->getValue() === $name && $sheet->getCell($column.($total+13))->getDataType() === 's', 'Signer names must be saved safe text and move with the table.');
-            checkReceipt(str_contains($sheet->getCell('C3')->getValue(),'BẢN NHÁP'), 'Draft receipts must be labelled.');
+            checkReceipt($direction==='import' ? str_contains($sheet->getCell('C3')->getValue(),'BẢN NHÁP') : (string)$sheet->getCell('C3')->getValue()==='', 'Only import receipts retain the draft/number label.');
+            $merges=array_values($sheet->getMergeCells());
+            foreach ($merges as $index=>$range) {
+                [$a,$b]=\PhpOffice\PhpSpreadsheet\Cell\Coordinate::rangeBoundaries($range);
+                foreach(array_slice($merges,$index+1) as $other) {
+                    [$c,$d]=\PhpOffice\PhpSpreadsheet\Cell\Coordinate::rangeBoundaries($other);
+                    checkReceipt(!($a[0]<=$d[0] && $b[0]>=$c[0] && $a[1]<=$d[1] && $b[1]>=$c[1]), 'Overlapping merges would trigger Excel repair: '.$range.' / '.$other);
+                }
+            }
+            if($direction==='export') foreach(['C1:D2','A4:E4','F4:I4','A5:I5','A6:E6','F6:I6'] as $range) checkReceipt(in_array($range,$merges,true),'Export metadata must use non-overlapping merged ranges: '.$range);
             checkReceipt(str_contains($sheet->getCell('A'.($total+3))->getValue(),$direction==='import'||$count?'0000123':$bill['number']), 'Source invoice numbers must retain leading zeros; empty exports must fall back to their receipt number.');
             checkReceipt(str_contains($sheet->getCell('C1')->getValue(),$direction==='import'?'12 tháng 10':'11 tháng 10'), 'Receipt date must be used, not download date.');
             foreach (['E1','B7','J7','K7'] as $cell) {
@@ -47,7 +56,7 @@ try {
                 checkReceipt($sheet->getStyle($cell)->getFont()->getName() === $original->getStyle($cell)->getFont()->getName(), 'Template font was changed.');
                 checkReceipt($sheet->getStyle($cell)->getBorders()->exportArray() === $original->getStyle($cell)->getBorders()->exportArray(), 'Template borders were changed.');
             }
-            foreach (range('A','K') as $column) checkReceipt($sheet->getColumnDimension($column)->getWidth() === $original->getColumnDimension($column)->getWidth(), 'Template column width was changed.');
+            foreach (range('A','K') as $column) checkReceipt($sheet->getColumnDimension($column)->getWidth() === $original->getColumnDimension($column)->getWidth(), 'Template column width was changed: '.$direction.' '.$column.' '.$sheet->getColumnDimension($column)->getWidth().' / '.$original->getColumnDimension($column)->getWidth());
             checkReceipt($sheet->getPageSetup()->getOrientation() === $original->getPageSetup()->getOrientation()
                 && $sheet->getPageSetup()->getScale() === $original->getPageSetup()->getScale()
                 && $sheet->getPageMargins() == $original->getPageMargins(), 'Template print settings were changed.');
@@ -79,6 +88,12 @@ try {
     $bill['print_snapshot'] = null;
     $book = buildReceiptWorkbook('export', $bill);
     checkReceipt($book->getActiveSheet()->getCell('D'.(10+count($bill['items'])+13))->getValue() === '' && $book->getActiveSheet()->getCell('F4')->getValue() === 'Địa chỉ bộ phận: ', 'Unconfigured receipts must never retain sample names or addresses.');
+    $book->disconnectWorksheets();
+    $bill['reason']=str_repeat('Địa chỉ dài và lý do xuất kho ',15);
+    $bill['print_snapshot']=['department_address'=>str_repeat('Số 34 Dương Khuê Hà Nội ',8),'location'=>str_repeat('Ngăn kho chi nhánh ',8)];
+    $book=buildReceiptWorkbook('export',$bill);$sheet=$book->getActiveSheet();
+    checkReceipt($sheet->getCell('A5')->getValue()==='-  Lý do xuất kho: '.$bill['reason'] && $sheet->getRowDimension(5)->getRowHeight()>34,'Long reasons must retain full text and expand vertically.');
+    checkReceipt($sheet->getStyle('F4')->getAlignment()->getWrapText() && !$sheet->getStyle('F4')->getAlignment()->getShrinkToFit() && $sheet->getRowDimension(4)->getRowHeight()>34,'Long addresses must wrap inside merged cells rather than shrinking into a single cell.');
     $book->disconnectWorksheets();
     $bill['issued_date']='2026-02-30';
     try { buildReceiptWorkbook('export',$bill); throw new RuntimeException('Invalid stored dates must not silently change on Excel.'); }

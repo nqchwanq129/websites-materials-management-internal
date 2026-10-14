@@ -39,6 +39,7 @@ const employeeDetailsDialog = document.getElementById('employee-details-dialog')
 let viewedEmployee = null;
 function openEmployeeDetails(employee) {
     viewedEmployee = employee;
+    document.getElementById('employee-detail-state').textContent = employee.status === 'active' ? 'Khóa' : 'Mở khóa';
     document.getElementById('employee-detail-description').textContent = employee.code + ' · ' + employee.full_name;
     for (const field of ['code', 'full_name', 'email', 'phone', 'warehouse', 'account', 'status']) {
         const value = field === 'warehouse' ? [...employeeWarehouse.options].find(option => option.value === employee.warehouse)?.textContent
@@ -71,7 +72,6 @@ function openEmployee(employee = null) {
     employeeDialog.showModal();
 }
 document.getElementById('create-employee').addEventListener('click', () => openEmployee());
-document.querySelectorAll('.edit-employee').forEach(button => button.addEventListener('click', () => openEmployee(JSON.parse(button.closest('[data-employee]').dataset.employee))));
 document.querySelectorAll('.close-employee-dialog').forEach(button => button.addEventListener('click', () => employeeDialog.close()));
 editEmployeeStatus.addEventListener('change', updateEmployeeStatusNote);
 employeeForm.addEventListener('submit', event => {
@@ -82,8 +82,8 @@ const employeeStateDialog = document.getElementById('employee-state-dialog');
 const employeeStateForm = document.getElementById('employee-state-form');
 employeeStateForm.querySelector('[data-close-state]').addEventListener('click', () => employeeStateDialog.close());
 employeeStateForm.addEventListener('submit', event => { event.preventDefault(); submitManagementForm(employeeStateForm, employeeStateDialog, 'employee-notice'); });
-document.querySelectorAll('.employee-state-preview').forEach(button => button.addEventListener('click', () => {
-    const employee = JSON.parse(button.closest('[data-employee]').dataset.employee);
+document.getElementById('employee-detail-state').addEventListener('click', () => {
+    const employee = viewedEmployee;
     employeeStateForm.elements.id.value = employee.id || '';
     employeeStateForm.elements.version.value = employee.version || '';
     employeeStateForm.elements.status.value = employee.status === 'active' ? 'inactive' : 'active';
@@ -92,4 +92,4 @@ document.querySelectorAll('.employee-state-preview').forEach(button => button.ad
     document.getElementById('employee-state-description').textContent = `${employee.full_name} (${employee.code}). ${employee.status === 'active' ? 'Khi ngừng hoạt động, nhân viên không được đăng nhập bằng tài khoản liên kết; hồ sơ vẫn được giữ lại.' : 'Khi được kích hoạt, nhân viên có thể sử dụng tài khoản liên kết nếu tài khoản đó đang hoạt động.'}`;
     employeeStateDialog.returnValue = '';
     employeeStateDialog.showModal();
-}));
+});

@@ -28,6 +28,50 @@ function loadExportSources(PDO $pdo, ?string $id = null, bool $lock = false, ?ar
     }
     return $records;
 }
+function allocateExportLines(PDO $pdo, string $warehouse, string $date, array $items, bool $checkVersions = true): array
+{
+    $sources = []; $lines = []; $total = '0.000000';
+    foreach ($items as $item) {
+        if (!is_array($item)) throw new DomainException('Dòng xuất không hợp lệ.');
+        $sourceId = managementId($item['source_import_detail_id'] ?? null);
+        if (!isset($sources[$sourceId])) {
+            $source = loadExportSources($pdo, $sourceId, true)[0] ?? null;
+            if (!$source || $source['warehouse_id'] !== $warehouse || $source['received_date'] > $date) throw new DomainException('Lô nhập không thuộc kho xuất, chưa xác nhận, chưa đến ngày nhập hoặc hàng đã ngừng sử dụng.');
+            $sources[$sourceId] = $source;
+        }
+        $source = &$sources[$sourceId];
+        if ($checkVersions && managementText($item, 'version', 64, true) !== $source['version']) throw new DomainException('Lô hàng đã thay đổi. Tải lại trang trước khi xuất.');
+        $quantity = importDecimal($item['quantity'] ?? '', true);
+        if (bccomp($quantity, $source['remaining_quantity'], 6) > 0) throw new DomainException('Số lượng xuất vượt tồn lô ' . $source['receipt_number'] . ' / ' . $source['product_name'] . '. Hãy tải lại để kiểm tra tồn mới nhất.');
+        if (bccomp($source['remaining_amount'], '0', 6) < 0) throw new DomainException('Giá trị đã xuất vượt giá trị lô nhập. Kiểm tra các phiếu cũ trước khi xuất tiếp.');
+        // Allocate stored invoice value; the final withdrawal takes the remaining value to retain invoice rounding.
+        $amount = bccomp($quantity, $source['remaining_quantity'], 6) === 0 ? $source['remaining_amount']
+            : bcdiv(bcmul($source['amount_before_tax'], $quantity, 12), $source['received_quantity'], 6);
+        if (bccomp($amount, $source['remaining_amount'], 6) > 0) throw new DomainException('Giá trị phân bổ vượt giá trị còn lại của lô.');
+        $amount = importDecimal($amount); $total = importDecimal(bcadd($total, $amount, 6));
+        $source['remaining_quantity'] = bcsub($source['remaining_quantity'], $quantity, 6);
+        $source['remaining_amount'] = bcsub($source['remaining_amount'], $amount, 6);
+        $lines[] = ['product_id' => (string) $source['product_id'], 'source_import_detail_id' => $sourceId, 'issued_quantity' => $quantity,
+            'unit_price' => $source['unit_price'], 'amount_before_tax' => $amount, 'product_name' => $source['product_name'], 'unit' => $source['unit'],
+            'note' => managementText($item, 'note', 16000) ?: null];
+        unset($source);
+    }
+    return [$lines, $total];
+}
+function createExportTransfer(PDO $pdo, string $actorId, string $destination, string $id, string $date, array $lines, string $total, string $sender): string
+{
+    $transferNumber = 'DC-PX-' . $id;
+    $transferPrint = receiptPrintSnapshot($pdo, $destination, $actorId);
+    $pdo->prepare("INSERT INTO import_bill (warehouse_id,number,received_date,receipt_type,sender_name,total_before_tax,total_after_tax,status,created_by,print_snapshot) VALUES (?,?,?,'transfer',?,?,?,'confirmed',?,?)")
+        ->execute([$destination, $transferNumber, $date, $sender, $total, $total, $actorId, json_encode($transferPrint,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR)]);
+    $transferId = $pdo->lastInsertId();
+    $stmt = $pdo->prepare("INSERT INTO import_bill_details (import_bill_id,product_id,received_quantity,unit_price,amount_before_tax,product_name,unit,note,source_export_detail_id,decision_status,created_by) VALUES (?,?,?,?,?,?,?,?,?,'pending',?)");
+    foreach ($lines as $line) $stmt->execute([$transferId, $line['product_id'], $line['issued_quantity'], $line['unit_price'], $line['amount_before_tax'], $line['product_name'], $line['unit'], $line['note'], $line['id'], $actorId]);
+    $data = ['number' => $transferNumber, 'source_export_bill_id' => $id, 'status' => 'confirmed', 'total_before_tax' => $total, 'items' => $lines, 'print_snapshot'=>$transferPrint];
+    $pdo->prepare("INSERT INTO audit_logs (user_id,warehouse_id,action,entity_type,entity_id,after_data,created_at) VALUES (?,?,'create','import_bill',?,?,UTC_TIMESTAMP(6) + INTERVAL 7 HOUR)")
+        ->execute([$actorId,$destination,$transferId,json_encode($data,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR)]);
+    return $transferId;
+}
 function saveExport(PDO $pdo, string $actorId, array $input, array $files = []): string
 {
     if (($input['action'] ?? '') !== 'create') throw new DomainException('Thao tác phiếu xuất không hợp lệ.');
@@ -48,32 +92,7 @@ function saveExport(PDO $pdo, string $actorId, array $input, array $files = []):
         $actor = findUser($pdo, 'id', $actorId);
         if (!userCanAct($actor) || warehousePermission($pdo, $actorId, $warehouse) !== 'keeper') throw new DomainException('Bạn không có quyền xuất kho hoặc kho đã ngừng hoạt động.');
         if ($destination !== null && warehousePermission($pdo, $actorId, $destination) !== 'keeper') throw new DomainException('Kho nhận không tồn tại hoặc đã ngừng hoạt động.');
-        $sources = []; $lines = []; $total = '0.000000';
-        foreach ($items as $item) {
-            if (!is_array($item)) throw new DomainException('Dòng xuất không hợp lệ.');
-            $sourceId = managementId($item['source_import_detail_id'] ?? null);
-            if (!isset($sources[$sourceId])) {
-                $source = loadExportSources($pdo, $sourceId, true)[0] ?? null;
-                if (!$source || $source['warehouse_id'] !== $warehouse || $source['received_date'] > $date) throw new DomainException('Lô nhập không thuộc kho xuất, chưa xác nhận, chưa đến ngày nhập hoặc hàng đã ngừng sử dụng.');
-                $sources[$sourceId] = $source;
-            }
-            $source = &$sources[$sourceId];
-            if (managementText($item, 'version', 64, true) !== $source['version']) throw new DomainException('Lô hàng đã thay đổi. Tải lại trang trước khi xuất.');
-            $quantity = importDecimal($item['quantity'] ?? '', true);
-            if (bccomp($quantity, $source['remaining_quantity'], 6) > 0) throw new DomainException('Số lượng xuất vượt tồn lô ' . $source['receipt_number'] . ' / ' . $source['product_name'] . '. Hãy tải lại để kiểm tra tồn mới nhất.');
-            if (bccomp($source['remaining_amount'], '0', 6) < 0) throw new DomainException('Giá trị đã xuất vượt giá trị lô nhập. Kiểm tra các phiếu cũ trước khi xuất tiếp.');
-            // Allocate stored invoice value; the final withdrawal takes the remaining value to retain invoice rounding.
-            $amount = bccomp($quantity, $source['remaining_quantity'], 6) === 0 ? $source['remaining_amount']
-                : bcdiv(bcmul($source['amount_before_tax'], $quantity, 12), $source['received_quantity'], 6);
-            if (bccomp($amount, $source['remaining_amount'], 6) > 0) throw new DomainException('Giá trị phân bổ vượt giá trị còn lại của lô.');
-            $amount = importDecimal($amount); $total = importDecimal(bcadd($total, $amount, 6));
-            $source['remaining_quantity'] = bcsub($source['remaining_quantity'], $quantity, 6);
-            $source['remaining_amount'] = bcsub($source['remaining_amount'], $amount, 6);
-            $lines[] = ['product_id' => (string) $source['product_id'], 'source_import_detail_id' => $sourceId, 'issued_quantity' => $quantity,
-                'unit_price' => $source['unit_price'], 'amount_before_tax' => $amount, 'product_name' => $source['product_name'], 'unit' => $source['unit'],
-                'note' => managementText($item, 'note', 16000) ?: null];
-            unset($source);
-        }
+        [$lines, $total] = allocateExportLines($pdo, $warehouse, $date, $items);
         $printSnapshot = receiptPrintSnapshot($pdo, $warehouse, $actorId, $input);
         $pdo->prepare('INSERT INTO export_bill (warehouse_id,number,issued_date,issue_type,reason,receiver_name,total_before_tax,status,destination_warehouse_id,created_by,print_snapshot) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
             ->execute([$warehouse, $number, $date, $type, $reason, $receiver ?: null, $total, $status, $destination, $actorId, json_encode($printSnapshot,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR)]);
@@ -86,14 +105,7 @@ function saveExport(PDO $pdo, string $actorId, array $input, array $files = []):
         };
         $transferId = null;
         if ($type === 'transfer' && $status === 'confirmed') {
-            $transferNumber = 'DC-PX-' . $id;
-            $transferPrint = receiptPrintSnapshot($pdo, $destination, $actorId);
-            $pdo->prepare("INSERT INTO import_bill (warehouse_id,number,received_date,receipt_type,sender_name,total_before_tax,total_after_tax,status,created_by,print_snapshot) VALUES (?,?,?,'transfer',?,?,?,'confirmed',?,?)")
-                ->execute([$destination, $transferNumber, $date, $actor['full_name'] ?? $actor['username'], $total, $total, $actorId, json_encode($transferPrint,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR)]);
-            $transferId = $pdo->lastInsertId();
-            $stmt = $pdo->prepare("INSERT INTO import_bill_details (import_bill_id,product_id,received_quantity,unit_price,amount_before_tax,product_name,unit,note,source_export_detail_id,decision_status,created_by) VALUES (?,?,?,?,?,?,?,?,?,'pending',?)");
-            foreach ($lines as $line) $stmt->execute([$transferId, $line['product_id'], $line['issued_quantity'], $line['unit_price'], $line['amount_before_tax'], $line['product_name'], $line['unit'], $line['note'], $line['id'], $actorId]);
-            $audit('import_bill', $transferId, $destination, ['number' => $transferNumber, 'source_export_bill_id' => $id, 'status' => 'confirmed', 'total_before_tax' => $total, 'items' => $lines, 'print_snapshot'=>$transferPrint]);
+            $transferId = createExportTransfer($pdo, $actorId, $destination, $id, $date, $lines, $total, $actor['full_name'] ?? $actor['username']);
         }
         $stored = storeAttachment($pdo, $pdf, 'export_bill_id', $id, $actorId);
         $audit('export_bill', $id, $warehouse, ['number' => $number, 'issued_date' => $date, 'issue_type' => $type, 'reason' => $reason, 'receiver_name' => $receiver,
@@ -104,6 +116,44 @@ function saveExport(PDO $pdo, string $actorId, array $input, array $files = []):
         if ($pdo->inTransaction()) $pdo->rollBack();
         if ($stored !== null && is_file($stored)) unlink($stored);
         if ($error instanceof PDOException && ($error->errorInfo[1] ?? 0) === 1062) throw new DomainException('Số phiếu đã tồn tại trong kho và năm này. Hãy kiểm tra trước khi lưu lại.');
+        throw $error;
+    }
+}
+function confirmExport(PDO $pdo, string $actorId, array $input): string
+{
+    if (managementText($input, 'action', 20, true) !== 'confirm') throw new DomainException('Thao tác phiếu xuất không hợp lệ.');
+    $id = managementId($input['id'] ?? null);
+    $pdo->beginTransaction();
+    try {
+        // Use the same management lock as receipt creation so confirmations cannot spend the same stock twice.
+        $pdo->query('SELECT id FROM users ORDER BY id FOR UPDATE')->fetchAll();
+        $actor = findUser($pdo, 'id', $actorId);
+        $stmt = $pdo->prepare('SELECT * FROM export_bill WHERE id=? FOR UPDATE'); $stmt->execute([$id]); $bill = $stmt->fetch();
+        if (!$bill || !userCanAct($actor) || warehousePermission($pdo, $actorId, (string)$bill['warehouse_id']) !== 'keeper') throw new DomainException('Phiếu không tồn tại hoặc bạn không có quyền tại kho này.');
+        if ($bill['status'] !== 'draft') throw new DomainException('Chỉ xác nhận phiếu xuất đang ở trạng thái Nháp. Hãy tải lại trang.');
+        $destination = $bill['destination_warehouse_id'];
+        if ($bill['issue_type'] === 'transfer' && ($destination === null || $destination === $bill['warehouse_id'] || warehousePermission($pdo, $actorId, (string)$destination) !== 'keeper')) throw new DomainException('Kho nhận không hợp lệ hoặc bạn không có quyền điều chuyển vào kho này.');
+        if ($bill['issue_type'] !== 'transfer' && $destination !== null) throw new DomainException('Phiếu xuất có kho nhận không hợp lệ.');
+        $stmt = $pdo->prepare('SELECT * FROM export_bill_details WHERE export_bill_id=? ORDER BY id FOR UPDATE'); $stmt->execute([$id]); $items = $stmt->fetchAll();
+        if (managementText($input, 'version', 64, true) !== importVersion($bill, $items)) throw new DomainException('Phiếu hoặc quyết định liên kết đã thay đổi. Hãy tải lại trang trước khi xác nhận.');
+        if (!$items || count($items) > 200) throw new DomainException('Phiếu phải có từ 1 đến 200 dòng hàng.');
+        $before = $bill + ['items'=>$items];
+        [$lines, $total] = allocateExportLines($pdo, (string)$bill['warehouse_id'], $bill['issued_date'], array_map(static fn($item)=>[
+            'source_import_detail_id'=>(string)$item['source_import_detail_id'], 'quantity'=>$item['issued_quantity'], 'note'=>$item['note'] ?? ''
+        ], $items), false);
+        $stmt = $pdo->prepare('UPDATE export_bill_details SET amount_before_tax=?,updated_at=GREATEST(CURRENT_TIMESTAMP(6),updated_at + INTERVAL 1 MICROSECOND) WHERE id=?');
+        foreach ($lines as $index=>&$line) { $line['id'] = (string)$items[$index]['id']; $stmt->execute([$line['amount_before_tax'],$line['id']]); } unset($line);
+        $pdo->prepare("UPDATE export_bill SET status='confirmed',total_before_tax=?,updated_at=GREATEST(CURRENT_TIMESTAMP(6),updated_at + INTERVAL 1 MICROSECOND) WHERE id=?")->execute([$total,$id]);
+        $transferId = $bill['issue_type'] === 'transfer' ? createExportTransfer($pdo, $actorId, (string)$destination, $id, $bill['issued_date'], $lines, $total, $actor['full_name'] ?? $actor['username']) : null;
+        $stmt = $pdo->prepare('SELECT * FROM export_bill_details WHERE export_bill_id=? ORDER BY id'); $stmt->execute([$id]);
+        $after = array_replace($bill, ['status'=>'confirmed','total_before_tax'=>$total,'items'=>$stmt->fetchAll(),'destination_import_bill_id'=>$transferId]);
+        unset($before['updated_at'], $after['updated_at']);
+        $pdo->prepare("INSERT INTO audit_logs (user_id,warehouse_id,action,entity_type,entity_id,before_data,after_data,created_at) VALUES (?,?,'confirm','export_bill',?,?,?,UTC_TIMESTAMP(6) + INTERVAL 7 HOUR)")
+            ->execute([$actorId,$bill['warehouse_id'],$id,json_encode($before,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR),json_encode($after,JSON_UNESCAPED_UNICODE|JSON_THROW_ON_ERROR)]);
+        $pdo->commit();
+        return 'Đã xuất kho phiếu '.$bill['number'].', cập nhật tồn kho'.($transferId ? ' và tạo phiếu nhập điều chuyển tại kho nhận.' : ' và lưu nhật ký.');
+    } catch (Throwable $error) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
         throw $error;
     }
 }
@@ -130,5 +180,10 @@ function loadExports(PDO $pdo, ?array $access = null): array
         JOIN export_bill_details e ON e.id=d.source_export_detail_id ORDER BY b.id') as $transfer) {
         if (isset($records[(string)$transfer['export_bill_id']]) && ($access === null || canViewWarehouse($access, (string)$transfer['warehouse_id']))) $records[(string)$transfer['export_bill_id']]['transfers'][] = $transfer;
     }
+    foreach ($records as &$row) {
+        $row['version'] = importVersion($row, $row['items']);
+        $row['can_confirm'] = canManageWarehouse($access, (string)$row['warehouse_id'])
+            && ($row['issue_type'] !== 'transfer' || canManageWarehouse($access, (string)$row['destination_warehouse_id']));
+    } unset($row);
     return array_values($records);
 }

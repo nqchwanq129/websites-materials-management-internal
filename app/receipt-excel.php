@@ -2,10 +2,21 @@
 declare(strict_types=1);
 
 use PhpOffice\PhpSpreadsheet\Cell\DataType;
+use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Style\Alignment;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
+
+function mergeReceiptCells(\PhpOffice\PhpSpreadsheet\Worksheet\Worksheet $sheet, string $range): void
+{
+    [$start,$end] = Coordinate::rangeBoundaries($range);
+    foreach ($sheet->getMergeCells() as $existing) {
+        [$a,$b] = Coordinate::rangeBoundaries($existing);
+        if ($start[0] <= $b[0] && $end[0] >= $a[0] && $start[1] <= $b[1] && $end[1] >= $a[1]) $sheet->unmergeCells($existing);
+    }
+    $sheet->mergeCells($range);
+}
 
 function receiptMoneyWords(string $amount): string
 {
@@ -45,7 +56,7 @@ function buildReceiptWorkbook(string $direction, array $bill): Spreadsheet
     $incoming = $direction === 'import';
     $book = IOFactory::load(dirname(__DIR__) . '/resources/templates/receipts/mau_phieu_' . ($incoming ? 'nhap' : 'xuat') . '_kho.xlsx');
     $sheet = $book->getActiveSheet();
-    if (!$incoming) foreach (['A4:E4','F4:I4','A6:E6','F6:I6'] as $range) $sheet->mergeCells($range);
+    if (!$incoming) foreach (['A4:E4','F4:I4','A5:I5','A6:E6','F6:I6'] as $range) mergeReceiptCells($sheet, $range);
     $print = is_string($bill['print_snapshot'] ?? null) ? json_decode($bill['print_snapshot'], true, 16, JSON_THROW_ON_ERROR) : ($bill['print_snapshot'] ?? []);
     $sheet->setCellValueExplicit('A1', "Đơn vị:\n" . ($print['unit_name'] ?? '') . "\nBộ phận:\n" . ($print['department_name'] ?? ''), DataType::TYPE_STRING);
     $sheet->setCellValueExplicit('F4', 'Địa chỉ bộ phận: ' . ($print['department_address'] ?? ''), DataType::TYPE_STRING);
@@ -58,12 +69,24 @@ function buildReceiptWorkbook(string $direction, array $bill): Spreadsheet
     $date = DateTimeImmutable::createFromFormat('!Y-m-d', $bill[$incoming ? 'received_date' : 'issued_date']);
     if (!$date || $date->format('Y-m-d') !== $bill[$incoming ? 'received_date' : 'issued_date']) throw new DomainException('Ngày của phiếu không hợp lệ.');
     $dateLabel = 'Ngày ' . $date->format('d') . ' tháng ' . $date->format('m') . ' năm ' . $date->format('Y');
-    $sheet->mergeCells('C1:D2');
+    mergeReceiptCells($sheet, 'C1:D2');
     $sheet->setCellValueExplicit('C1', ($incoming ? 'PHIẾU NHẬP KHO' : 'PHIẾU XUẤT KHO') . "\n" . $dateLabel, DataType::TYPE_STRING);
     $sheet->getStyle('C1:D2')->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER)->setVertical(Alignment::VERTICAL_CENTER)->setWrapText(true);
     $status = ['draft' => ' · BẢN NHÁP', 'confirmed' => '', 'cancelled' => ' · ĐÃ HỦY'][$bill['status']];
-    $sheet->mergeCells('C3:I3');
-    $sheet->setCellValueExplicit('C3', 'Số phiếu: ' . $bill['number'] . $status, DataType::TYPE_STRING);
+    if ($incoming) {
+        mergeReceiptCells($sheet, 'C3:I3');
+        $sheet->setCellValueExplicit('C3', 'Số phiếu: ' . $bill['number'] . $status, DataType::TYPE_STRING);
+    } else {
+        foreach ($sheet->getMergeCells() as $range) {
+            [$start,$end] = Coordinate::rangeBoundaries($range);
+            if ($start[1] <= 3 && $end[1] >= 3) $sheet->unmergeCells($range);
+        }
+        foreach (range('C','K') as $column) $sheet->setCellValueExplicit($column.'3', '', DataType::TYPE_STRING);
+        if ($bill['status'] === 'cancelled') {
+            mergeReceiptCells($sheet, 'C3:I3');
+            $sheet->setCellValueExplicit('C3', 'ĐÃ HỦY', DataType::TYPE_STRING);
+        }
+    }
     $sheet->getStyle('C3')->getFont()->setSize(10);
     $sheet->getStyle('C3')->getAlignment()->setShrinkToFit(true);
     $person = (string) ($bill[$incoming ? 'sender_name' : 'receiver_name'] ?? '');
@@ -92,7 +115,8 @@ function buildReceiptWorkbook(string $direction, array $bill): Spreadsheet
         foreach (range('A', 'K') as $column) $sheet->setCellValueExplicit($column . $firstRow, '', DataType::TYPE_STRING);
     }
     if (bccomp($total, $bill['total_before_tax'], 6) !== 0) {
-        $sheet->setCellValueExplicit('C3', 'Số phiếu: ' . $bill['number'] . $status . ' · CẦN ĐỐI SOÁT TỔNG PHIẾU', DataType::TYPE_STRING);
+        mergeReceiptCells($sheet, 'C3:I3');
+        $sheet->setCellValueExplicit('C3', ($incoming ? 'Số phiếu: '.$bill['number'].$status : ($bill['status']==='cancelled' ? 'ĐÃ HỦY' : '')) . ' · CẦN ĐỐI SOÁT TỔNG PHIẾU', DataType::TYPE_STRING);
     }
     $sheet->setCellValueExplicit('I' . $totalRow, productQuantity($total), DataType::TYPE_STRING);
     $sheet->getStyle('F' . $firstRow . ':I' . $totalRow)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_RIGHT)->setShrinkToFit(true);
@@ -107,7 +131,21 @@ function buildReceiptWorkbook(string $direction, array $bill): Spreadsheet
     $sheet->setCellValueExplicit('C' . ($totalRow + 13), $person, DataType::TYPE_STRING);
     $sheet->setCellValueExplicit('A' . ($totalRow + 13), $print['creator_name'] ?? ($bill['creator_name'] ?? ''), DataType::TYPE_STRING);
     foreach (['D'=>'keeper','F'=>'accountant','H'=>'director'] as $column=>$role) $sheet->setCellValueExplicit($column . ($totalRow + 13), $print[$role.'_name'] ?? '', DataType::TYPE_STRING);
-    foreach (['A1','A4','F4','A6','F6'] as $cell) $sheet->getStyle($cell)->getAlignment()->setShrinkToFit(true);
+    $sheet->getStyle('A1')->getAlignment()->setShrinkToFit(true);
+    foreach (['A4:E4','F4:I4','A5:'.($incoming?'E5':'I5'),'A6:E6','F6:I6'] as $range) {
+        [$start,$end] = Coordinate::rangeBoundaries($range); $width = 0;
+        for ($column=$start[0];$column<=$end[0];$column++) {
+            $columnWidth = ($sheet->getColumnDimensions()[Coordinate::stringFromColumnIndex($column)] ?? $sheet->getDefaultColumnDimension())->getWidth();
+            $width += $columnWidth > 0 ? $columnWidth : 8.43;
+        }
+        $cell = Coordinate::stringFromColumnIndex($start[0]).$start[1];
+        $text = (string)$sheet->getCell($cell)->getValue();
+        $sheet->getStyle($range)->getAlignment()->setWrapText(true)->setShrinkToFit(false)->setVertical(Alignment::VERTICAL_CENTER);
+        // ponytail: merged cells cannot auto-fit row height in Excel; estimate by text width, use font metrics if precise typesetting is required.
+        $lines = 0; foreach (explode("\n",$text) as $line) $lines += max(1,(int)ceil(mb_strwidth($line,'UTF-8') / max(1,$width * .8)));
+        $dimension = $sheet->getRowDimension($start[1]);
+        $dimension->setRowHeight(max($dimension->getRowHeight(),$lines * 17));
+    }
     return $book;
 }
 

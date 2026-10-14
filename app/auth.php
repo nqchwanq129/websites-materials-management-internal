@@ -90,7 +90,7 @@ function canAccessPage(array $access, string $page, bool $write = false): bool
     if (in_array($page, ['accounts','employees','warehouses','audit'], true)) return false;
     $keeper = in_array('keeper', $access['warehouses'], true);
     if (in_array($page, ['import-create','export-create'], true)) return $keeper;
-    if ($write) return $keeper && in_array($page, ['imports','decisions'], true);
+    if ($write) return $keeper && in_array($page, ['imports','exports','decisions'], true);
     return (bool)$access['warehouses'] && in_array($page, ['products','materials','spare-parts','tools','fixed-assets','other-products','imports','exports','reports','suppliers','decisions',
         'import-file','import-image','export-file','decision-file','import-excel','export-excel','product-excel'], true);
 }

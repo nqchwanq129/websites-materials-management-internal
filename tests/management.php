@@ -453,7 +453,7 @@ try {
     rejected(fn() => parseImportXml(str_replace('<TChat>1</TChat>', '<TChat>3</TChat>', $invoiceXml)));
     verify(httpDecisionPdf(['action' => 'xml'], $invoiceXml, 'invoice.xml', 'import-create', 'xml')[0] === 403, 'XML upload must require CSRF.');
     [$xmlStatus, $xmlBody] = httpDecisionPdf(['action' => 'xml', 'csrf_token' => $csrf], $invoiceXml, 'invoice.xml', 'import-create', 'xml');
-    verify($xmlStatus === 200 && json_decode($xmlBody, true)['invoice']['supplier_name'] === 'Seller XML', 'XML endpoint must return parsed preview without writes.');
+    verify($xmlStatus === 200 && (json_decode($xmlBody, true)['invoice']['supplier_name'] ?? null) === 'Seller XML', 'XML endpoint must return parsed preview without writes: HTTP '.$xmlStatus.' '.substr(strip_tags($xmlBody),0,300));
     $createInput = ['csrf_token' => $csrf, 'action' => 'create', 'warehouse' => $warehouseIds[0], 'number' => 'CREATED-XML', 'received_date' => '2026-10-10',
         'receipt_type' => 'purchase', 'status' => 'confirmed', 'supplier_id' => '', 'supplier_name' => 'Seller XML', 'tax_code' => 'XML-TAX',
         'invoice_number' => 'XML-001', 'invoice_series' => 'C26T', 'invoice_date' => '2026-10-10', 'invoice_before_tax' => '2.808640', 'invoice_tax' => '0.280864', 'invoice_after_tax' => '3.089504',
@@ -693,7 +693,7 @@ try {
             verify($sheet->getCell('I'.$firstRow)->getValue()===productQuantity($receipt['items'][0]['amount_before_tax'])
                 && $sheet->getCell('I'.($firstRow+count($receipt['items'])))->getValue()===productQuantity($receipt['total_before_tax']),'Excel must preserve exact stored values, including the final lot allocation.');
             verify((string)$sheet->getCell('C'.($firstRow+count($receipt['items'])+13))->getValue()===(string)($direction==='import'?$receipt['sender_name']:$receipt['receiver_name']),'Excel must use the correct sender/receiver signature.');
-            verify(str_contains($sheet->getCell('C3')->getValue(),$receipt['number']),'Excel must include the selected receipt number.');
+            verify($direction==='import' ? str_contains((string)$sheet->getCell('C3')->getValue(),$receipt['number']) : (string)$sheet->getCell('C3')->getValue()==='', 'Export Excel must omit the receipt number row.');
             $workbook->disconnectWorksheets();
         } finally { unlink($xlsxPath); }
         verify(httpManagement($direction.'-excel&id='.$receipt['id'],['csrf_token'=>$csrf])[0]===405,'Excel downloads must reject POST requests.');
@@ -714,7 +714,7 @@ try {
     verify(httpManagement('imports',$usedEdit)[0]===200 && loadExportSources($pdo,$lotId)[0]['remaining_quantity']==='0.000000','Used lots must allow notes without altering stock.');
     foreach (['imports','exports'] as $route) {
         [, $body]=httpManagement($route);
-        verify(str_contains($body,'id="'.substr($route,0,-1).'-excel"') && str_contains($body,'page='.substr($route,0,-1).'-excel&amp;id='),'Live lists and detail dialogs must expose Excel links.');
+        verify(str_contains($body,'id="'.substr($route,0,-1).'-excel"') && ($route==='imports' || str_contains($body,'page=export-excel&amp;id=')),'Live receipt details must expose Excel downloads.');
     }
     $lotCreate['number']='TRANSFER-SOURCE'; verify(httpManagement('import-create',$lotCreate)[0]===200,'Transfer source failed.');
     $transferLot=array_values(array_filter(loadImports($pdo),static fn($row)=>$row['number']==='TRANSFER-SOURCE'))[0]['items'][0];
@@ -1198,6 +1198,41 @@ try {
     $confirmationRollbackCreate=$categoryCreate;$confirmationRollbackCreate['number']='ROLLBACK-CONFIRM';$categoryItem['version']=$pdo->query('SELECT updated_at FROM products WHERE id='.$categoryProduct)->fetchColumn();$confirmationRollbackCreate['items']=json_encode([$categoryItem]);
     verify(httpManagement('import-create',$confirmationRollbackCreate)[0]===200,'Rollback confirmation fixture failed.');
     $confirmationRollbackBill=array_values(array_filter(loadImports($pdo),static fn($row)=>$row['number']==='ROLLBACK-CONFIRM'))[0];
+    $exhaustedDraft=array_values(array_filter(loadExports($pdo),static fn($b)=>$b['number']==='EXPORT-DRAFT'))[0];
+    verify(httpManagement('exports',['csrf_token'=>$csrf,'action'=>'confirm','id'=>$exhaustedDraft['id'],'version'=>$exhaustedDraft['version']])[0]===422,'Draft confirmation must reject stock consumed by later receipts.');
+    $confirmExportCreate=['csrf_token'=>$csrf,'action'=>'create','warehouse'=>$warehouseIds[0],'number'=>'CONFIRM-EXPORT-SOURCE','received_date'=>'2026-10-13','receipt_type'=>'opening','status'=>'confirmed',
+        'items'=>json_encode([['product_id'=>'','code'=>'CONFIRM-EXPORT-GOOD','name'=>'Confirm export goods','category'=>'other','unit'=>'Piece','tracking_mode'=>'quantity','quantity'=>'6','unit_price'=>'3.333333','amount_before_tax'=>'20','tax_code'=>'KCT']])];
+    verify(httpManagement('import-create',$confirmExportCreate)[0]===200,'Draft export confirmation source failed.');
+    $confirmExportLot=array_values(array_filter(loadImports($pdo),static fn($b)=>$b['number']==='CONFIRM-EXPORT-SOURCE'))[0]['items'][0]['id'];
+    $newExportDraft=static function(string $number,string $quantity,?string $destination=null)use($pdo,$csrf,$warehouseIds,$confirmExportLot):array{
+        $source=loadExportSources($pdo,(string)$confirmExportLot)[0];
+        verify(httpManagement('export-create',['csrf_token'=>$csrf,'action'=>'create','warehouse'=>$warehouseIds[0],'number'=>$number,'issued_date'=>'2026-10-13','issue_type'=>$destination?'transfer':'allocation','destination_warehouse'=>$destination ?? '',
+            'reason'=>'Confirm draft','receiver_name'=>'Saved receiver','status'=>'draft','items'=>json_encode([['source_import_detail_id'=>(string)$confirmExportLot,'version'=>$source['version'],'quantity'=>$quantity]])])[0]===200,'Export confirmation draft creation failed.');
+        return array_values(array_filter(loadExports($pdo),static fn($b)=>$b['number']===$number))[0];
+    };
+    $exportDraft=$newExportDraft('CONFIRM-EXPORT-DRAFT','1');
+    $exportState=['csrf_token'=>$csrf,'action'=>'confirm','id'=>$exportDraft['id'],'version'=>$exportDraft['version']];
+    $bad=$exportState;$bad['csrf_token']='bad';verify(httpManagement('exports',$bad)[0]===403,'Export confirmation must enforce CSRF.');
+    $bad=$exportState;$bad['version']=str_repeat('0',64);verify(httpManagement('exports',$bad)[0]===422,'Export confirmation must reject stale versions.');
+    rejected(fn()=>confirmExport($pdo,$rbacUserId,$exportState));
+    $pdo->prepare("UPDATE products SET status='inactive' WHERE id=?")->execute([$exportDraft['items'][0]['product_id']]);
+    verify(httpManagement('exports',$exportState)[0]===422,'Inactive goods must block draft export confirmation.');
+    $pdo->prepare("UPDATE products SET status='active' WHERE id=?")->execute([$exportDraft['items'][0]['product_id']]);
+    verify(httpManagement('exports',$exportState)[0]===200,'Valid export draft confirmation failed.');
+    $exportConfirmed=array_values(array_filter(loadExports($pdo),static fn($b)=>$b['id']===$exportDraft['id']))[0];
+    verify($exportConfirmed['status']==='confirmed' && $exportConfirmed['total_before_tax']==='3.333333' && $exportConfirmed['receiver_name']==='Saved receiver' && $exportConfirmed['print_snapshot']===$exportDraft['print_snapshot'] && loadExportSources($pdo,(string)$confirmExportLot)[0]['remaining_quantity']==='5.000000','Confirmation must retain snapshots and consume exact stock once.');
+    $exportState['version']=$exportConfirmed['version'];verify(httpManagement('exports',$exportState)[0]===422,'Repeated confirmations must not consume stock twice.');
+    $confirmAudit=$pdo->query("SELECT before_data,after_data FROM audit_logs WHERE entity_type='export_bill' AND entity_id=".$exportDraft['id']." AND action='confirm'")->fetchAll();
+    verify(count($confirmAudit)===1 && json_decode($confirmAudit[0]['before_data'],true)['status']==='draft' && json_decode($confirmAudit[0]['after_data'],true)['status']==='confirmed','Export confirmation must audit both states once.');
+    $transferDraft=$newExportDraft('CONFIRM-EXPORT-TRANSFER','2',$warehouseIds[1]);
+    $transferState=['csrf_token'=>$csrf,'action'=>'confirm','id'=>$transferDraft['id'],'version'=>$transferDraft['version']];
+    $pdo->prepare("UPDATE warehouses SET status='inactive' WHERE id=?")->execute([$warehouseIds[1]]);
+    verify(httpManagement('exports',$transferState)[0]===422,'Inactive destination must block transfer confirmation.');
+    $pdo->prepare("UPDATE warehouses SET status='active' WHERE id=?")->execute([$warehouseIds[1]]);
+    verify(httpManagement('exports',$transferState)[0]===200,'Draft transfer confirmation failed.');
+    $confirmedTransfer=array_values(array_filter(loadExports($pdo),static fn($b)=>$b['id']===$transferDraft['id']))[0];
+    verify(count($confirmedTransfer['transfers'])===1 && $confirmedTransfer['transfers'][0]['status']==='confirmed' && loadExportSources($pdo,(string)$confirmExportLot)[0]['remaining_quantity']==='3.000000','Confirmed transfer must create one paired import and deduct source stock.');
+    $rollbackExportDraft=$newExportDraft('ROLLBACK-EXPORT-CONFIRM','1',$warehouseIds[1]);
     $noticeUsers=[];
     foreach(['A','B'] as $key){$pdo->prepare('INSERT INTO users (username,password_hash,is_super_admin) VALUES (?,?,0)')->execute([$prefix.'-notice-'.$key,password_hash($password,PASSWORD_DEFAULT)]);$noticeUsers[$key]=$pdo->lastInsertId();$pdo->prepare("INSERT INTO user_warehouses (user_id,warehouse_id,role) VALUES (?,?,'viewer')")->execute([$noticeUsers[$key],$warehouseIds[$key==='A'?0:1]]);}
     verify(httpManagement('warehouses',['csrf_token'=>$csrf,'action'=>'save','code'=>'NOTICE-GLOBAL','name'=>'Kho <script> mới','address'=>'Address','status'=>'active'])[0]===200,'Admin warehouse notification publisher failed.');
@@ -1233,8 +1268,9 @@ try {
     $auditBeforeReads=(int)$pdo->query('SELECT COUNT(*) FROM audit_logs')->fetchColumn();
     foreach([1,2] as $_)verify(httpManagement('notifications',['action'=>'read','id'=>$global['id'],'csrf_token'=>$noticeCsrf])[0]===200,'Reading a global notice must be allowed and idempotent.');
     $afterRead=loadActivityNotifications($pdo,$noticeUsers['A'],['known'=>[$global['id'],$noticeIds['A'][0],$noticeIds['B'][0]]]);
-    verify($afterRead['unread_count']===count($allA)-1 && $afterRead['alive_ids']===[$noticeIds['A'][0]] && !in_array($global['id'],array_column($collectNotices($noticeUsers['A']),'id'),true),'Read notifications must stay hidden and cached foreign/read IDs must be removed.');
-    verify(in_array($global['id'],array_column($collectNotices($noticeUsers['B']),'id'),true) && (int)$pdo->query('SELECT COUNT(*) FROM audit_logs')->fetchColumn()===$auditBeforeReads,'Read state must be personal and must not create new audit/notification events.');
+    $historyAfterRead=$collectNotices($noticeUsers['A']);$readGlobal=array_values(array_filter($historyAfterRead,static fn($row)=>$row['id']===$global['id']))[0];
+    verify($afterRead['unread_count']===count($allA)-1 && count($afterRead['alive_ids'])===2 && in_array($global['id'],$afterRead['alive_ids'],true) && in_array($noticeIds['A'][0],$afterRead['alive_ids'],true) && $afterRead['read_ids']===[$global['id']] && $readGlobal['is_read']===true && count($historyAfterRead)===count($allA),'Read notification history must remain, with correct personal read state and no foreign IDs.');
+    verify(array_values(array_filter($collectNotices($noticeUsers['B']),static fn($row)=>$row['id']===$global['id']))[0]['is_read']===false && (int)$pdo->query('SELECT COUNT(*) FROM audit_logs')->fetchColumn()===$auditBeforeReads,'Read state must be personal and must not create new audit/notification events.');
     $pdo->prepare('DELETE FROM user_warehouses WHERE user_id=?')->execute([$noticeUsers['A']]);
     $revoked=loadActivityNotifications($pdo,$noticeUsers['A'],['known'=>[$noticeIds['A'][0]]]);verify($revoked['scope']!==$firstFeed['scope'] && $revoked['alive_ids']===[] && !array_filter($collectNotices($noticeUsers['A']),static fn($row)=>$row['kind']==='receipt'),'Revoked warehouse grants must remove even cached receipt notifications while retaining global news.');
     verify(httpManagement('notifications',['action'=>'read','id'=>$noticeIds['A'][0],'csrf_token'=>$noticeCsrf])[0]===422,'Read access must recheck revocation at POST time.');
@@ -1247,6 +1283,11 @@ try {
     $pdo->prepare('UPDATE employees SET status=? WHERE id=?')->execute(['active',$printEmployeeId]);
     $pdo->exec("CREATE TRIGGER test_audit_failure BEFORE INSERT ON audit_logs FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Test audit failure'");
     verify(httpManagement('imports',['csrf_token'=>$csrf,'action'=>'confirm','id'=>$confirmationRollbackBill['id'],'version'=>$confirmationRollbackBill['version']])[0]===503 && $pdo->query('SELECT status FROM import_bill WHERE id='.$confirmationRollbackBill['id'])->fetchColumn()==='draft' && loadExportSources($pdo,$confirmationRollbackBill['items'][0]['id'])===[],'Failed audit must leave the receipt draft and stock unchanged.');
+    $importsBeforeFailedConfirm=(int)$pdo->query('SELECT COUNT(*) FROM import_bill')->fetchColumn();
+    verify(httpManagement('exports',['csrf_token'=>$csrf,'action'=>'confirm','id'=>$rollbackExportDraft['id'],'version'=>$rollbackExportDraft['version']])[0]===503
+        && $pdo->query('SELECT status FROM export_bill WHERE id='.$rollbackExportDraft['id'])->fetchColumn()==='draft'
+        && (int)$pdo->query('SELECT COUNT(*) FROM import_bill')->fetchColumn()===$importsBeforeFailedConfirm
+        && loadExportSources($pdo,(string)$confirmExportLot)[0]['remaining_quantity']==='3.000000','Failed audit must roll back confirmation, paired transfer, and stock together.');
     $categoryItem['version']=$pdo->query('SELECT updated_at FROM products WHERE id='.$categoryProduct)->fetchColumn();$categoryItem['category']='fixed_asset';$categoryCreate['number']='ROLLBACK-CATEGORY';$categoryCreate['items']=json_encode([$categoryItem]);
     verify(httpManagement('import-create',$categoryCreate)[0]===503 && $pdo->query('SELECT category FROM products WHERE id='.$categoryProduct)->fetchColumn()==='consumable' && !(int)$pdo->query("SELECT COUNT(*) FROM import_bill WHERE number='ROLLBACK-CATEGORY'")->fetchColumn(),'Category changes and receipt creation must roll back together when audit fails.');
     $printWarehouse=managementSnapshot($pdo,'warehouses',$printWarehouseId);

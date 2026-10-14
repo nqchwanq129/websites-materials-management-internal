@@ -40,6 +40,7 @@ if ($preview === 'reports') {
     $sampleRows['reports'][1] = $kind === 'inventory' ? 60 : 12;
 } else require __DIR__ . '/fixtures/' . (isset($productPages[$preview]) ? 'products' : $preview) . '.php';
 if ($rolePreview !== '') {
+    if (isset($managementData['exports'])) foreach ($managementData['exports'] as &$bill) $bill['can_confirm']=canManageWarehouse($access,(string)$bill['warehouse_id']); unset($bill);
     if (isset($managementData['imports'])) foreach ($managementData['imports'] as &$bill) $bill['can_edit']=canManageWarehouse($access,(string)$bill['warehouse_id']); unset($bill);
     if (isset($managementData['decisions'])) foreach ($managementData['decisions'] as &$decision) $decision['can_link']=canManageWarehouse($access,(string)$decision['warehouse_id']); unset($decision);
     if (isset($reportData)) $reportData['accounts']=[];

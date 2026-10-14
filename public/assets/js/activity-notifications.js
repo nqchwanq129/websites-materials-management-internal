@@ -29,7 +29,7 @@ function activityUpdateCount(count){
 function drawActivityNotifications(){
     activityList.replaceChildren();
     for(const item of activityItems){
-        const row=document.createElement('article');row.className='activity-item';row.setAttribute('role','listitem');row.dataset.id=item.id;
+        const row=document.createElement('article');row.className='activity-item '+(item.is_read?'is-read':'is-unread');row.setAttribute('role','listitem');row.dataset.id=item.id;
         const receipt=item.kind==='receipt',icon=document.createElement('span');icon.className='activity-item-icon '+(receipt?'receipt':'admin');icon.textContent=receipt?'↕':'◆';icon.setAttribute('aria-hidden','true');row.append(icon);
         const content=document.createElement('div');content.className='activity-item-content';
         const linked=receipt && /^index\.php\?page=(imports|exports)&id=[1-9][0-9]*$/.test(item.href || '');
@@ -39,7 +39,9 @@ function drawActivityNotifications(){
             event.preventDefault();markActivityRead(item).then(ok=>{if(ok)window.location.assign(item.href);});});}
         const description=document.createElement('p');description.textContent=item.description;
         const time=document.createElement('time');time.dateTime=item.created_at;time.textContent=new Date(item.created_at).toLocaleString('vi-VN',{timeZone:'Asia/Ho_Chi_Minh',hour:'2-digit',minute:'2-digit',day:'2-digit',month:'2-digit',year:'numeric'});
-        const seen=document.createElement('button');seen.type='button';seen.className='activity-seen';seen.textContent='Đã xem';seen.setAttribute('aria-label','Đánh dấu đã xem: '+item.title);seen.disabled=activityBusyIds.has(item.id);seen.addEventListener('click',()=>markActivityRead(item));
+        const seen=document.createElement(item.is_read?'span':'button');
+        if(item.is_read){seen.className='activity-read-status';seen.textContent='Đã đọc';}
+        else{seen.type='button';seen.className='activity-seen';seen.textContent='Đánh dấu đã đọc';seen.setAttribute('aria-label','Đánh dấu đã đọc: '+item.title);seen.disabled=activityBusyIds.has(item.id);seen.addEventListener('click',()=>markActivityRead(item));}
         content.append(title,description,time,seen);row.append(content);activityList.append(row);
     }
     document.getElementById('activity-empty').hidden=activityItems.length!==0;
@@ -63,13 +65,13 @@ async function loadActivityNotifications(mode='poll'){
         const result=await activityRequest('index.php?'+query);
         if(readRevision!==activityReadRevision){setTimeout(()=>loadActivityNotifications(),0);return;}
         const reset=mode==='reset' || (mode==='poll' && !activityPanel.matches(':popover-open')) || (activityScope!==null && activityScope!==result.scope);
-        const alive=new Set(result.alive_ids),items=reset?[]:activityItems.filter(item=>alive.has(item.id));
-        const combined=new Map(items.map(item=>[item.id,item]));for(const item of result.items)if(!activityReadIds.has(item.id))combined.set(item.id,item);
+        const alive=new Set(result.alive_ids),readIds=new Set(result.read_ids || []),items=reset?[]:activityItems.filter(item=>alive.has(item.id)).map(item=>({...item,is_read:readIds.has(item.id) || activityReadIds.has(item.id)}));
+        const combined=new Map(items.map(item=>[item.id,item]));for(const item of result.items)combined.set(item.id,{...item,is_read:Boolean(item.is_read) || activityReadIds.has(item.id)});
         activityItems=[...combined.values()].sort((a,b)=>BigInt(a.id)>BigInt(b.id)?-1:1);
         if(reset || mode==='more' || activityNext===null)activityNext=result.next_before;
         activityScope=result.scope;activityUpdateCount(result.unread_count);
         const frontier=activityFrontier===null?null:BigInt(activityFrontier),latest=BigInt(result.latest_id);
-        if(frontier!==null && latest>frontier && result.items.some(item=>BigInt(item.id)>frontier) && activitySound){
+        if(frontier!==null && latest>frontier && result.items.some(item=>!item.is_read && BigInt(item.id)>frontier) && activitySound){
             if(activityAudio?.state==='running')activityBeep();else activityPendingSound=true;
         }
         activityFrontier=String(frontier===null || latest>frontier?latest:frontier);try{sessionStorage.setItem('activity-frontier-'+activityUser,activityFrontier);}catch{}
@@ -78,11 +80,12 @@ async function loadActivityNotifications(mode='poll'){
     finally{activityLoading=false;drawActivityNotifications();}
 }
 async function markActivityRead(item,keepalive=false){
+    if(item.is_read || activityReadIds.has(item.id))return true;
     if(activityBusyIds.has(item.id))return false;
     activityBusyIds.add(item.id);drawActivityNotifications();
     try{
         if(!activityPreview){const body=new URLSearchParams({action:'read',id:item.id,csrf_token:document.getElementById('activity-csrf').value});await activityRequest('index.php?page=notifications',{method:'POST',body,keepalive});}
-        activityReadRevision++;activityReadIds.add(item.id);activityItems=activityItems.filter(row=>row.id!==item.id);activityUpdateCount(Math.max(0,activityCount-1));drawActivityNotifications();return true;
+        activityReadRevision++;activityReadIds.add(item.id);activityItems=activityItems.map(row=>row.id===item.id?{...row,is_read:true}:row);activityUpdateCount(Math.max(0,activityCount-1));drawActivityNotifications();return true;
     }catch(error){showNotification(error.message,'warning');return false;}
     finally{activityBusyIds.delete(item.id);drawActivityNotifications();}
 }

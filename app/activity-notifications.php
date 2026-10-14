@@ -22,14 +22,14 @@ function loadActivityNotifications(PDO $pdo,string $userId,array $input=[]): arr
     $readJoin=' LEFT JOIN notification_reads r ON r.audit_log_id=a.id AND r.user_id=? ';
     $stmt=$pdo->prepare("SELECT COUNT(IF(r.audit_log_id IS NULL,1,NULL)) AS unread_count,COALESCE(MAX(a.id),0) AS latest_id FROM audit_logs a $readJoin WHERE $scope");
     $stmt->execute([$userId,...$params]);$summary=$stmt->fetch();
-    $alive=[];
-    if($known){$stmt=$pdo->prepare("SELECT a.id FROM audit_logs a $readJoin WHERE $scope AND r.audit_log_id IS NULL AND a.id IN (".implode(',',array_fill(0,count($known),'?')).')');
-        $stmt->execute([$userId,...$params,...$known]);$alive=array_map('strval',$stmt->fetchAll(PDO::FETCH_COLUMN));}
-    $stmt=$pdo->prepare("SELECT a.id,a.entity_type,a.entity_id,a.action,a.created_at,a.before_data,a.after_data,w.name AS warehouse_name,
+    $alive=[];$readIds=[];
+    if($known){$stmt=$pdo->prepare("SELECT a.id,(r.audit_log_id IS NOT NULL) AS is_read FROM audit_logs a $readJoin WHERE $scope AND a.id IN (".implode(',',array_fill(0,count($known),'?')).')');
+        $stmt->execute([$userId,...$params,...$known]);$knownRows=$stmt->fetchAll();$alive=array_map('strval',array_column($knownRows,'id'));$readIds=array_map('strval',array_column(array_filter($knownRows,static fn($row)=>(bool)$row['is_read']),'id'));}
+    $stmt=$pdo->prepare("SELECT a.id,a.entity_type,a.entity_id,a.action,a.created_at,a.before_data,a.after_data,(r.audit_log_id IS NOT NULL) AS is_read,w.name AS warehouse_name,
         i.id AS import_id,e.id AS export_id FROM audit_logs a $readJoin LEFT JOIN warehouses w ON w.id=a.warehouse_id
         LEFT JOIN import_bill i ON a.entity_type='import_bill' AND i.id=a.entity_id AND i.warehouse_id=a.warehouse_id
         LEFT JOIN export_bill e ON a.entity_type='export_bill' AND e.id=a.entity_id AND e.warehouse_id=a.warehouse_id
-        WHERE $scope AND r.audit_log_id IS NULL".($before?' AND a.id<?':'').' ORDER BY a.id DESC LIMIT 6');
+        WHERE $scope".($before?' AND a.id<?':'').' ORDER BY a.id DESC LIMIT 6');
     $stmt->execute([$userId,...$params,...($before?[$before]:[])]);$rows=$stmt->fetchAll();$more=count($rows)>5;$rows=array_slice($rows,0,5);$items=[];
     $names=['warehouses'=>'kho','products'=>'hàng hóa','suppliers'=>'nhà cung cấp','employees'=>'nhân viên','decisions'=>'quyết định'];
     $actions=['create'=>'Thêm mới','update'=>'Cập nhật','delete'=>'Xóa','activate'=>'Kích hoạt','deactivate'=>'Ngừng hoạt động'];
@@ -41,11 +41,11 @@ function loadActivityNotifications(PDO $pdo,string $userId,array $input=[]): arr
             $description=$row['warehouse_name'] ?? 'Kho đã ngừng sử dụng';
             if($href===null)$description.=' · Phiếu đã được xóa';
         }else{$title=$actions[$row['action']].' '.$names[$row['entity_type']].': '.($snapshot['name'] ?? $snapshot['full_name'] ?? $snapshot['number'] ?? $snapshot['code'] ?? '#'.$row['entity_id']);$description='Thông báo quản trị · Toàn hệ thống';}
-        $items[]=['id'=>(string)$row['id'],'title'=>$title,'description'=>$description,'created_at'=>str_replace(' ','T',substr($row['created_at'],0,19)).'+07:00','href'=>$href,'kind'=>$receipt?'receipt':'admin'];
+        $items[]=['id'=>(string)$row['id'],'title'=>$title,'description'=>$description,'created_at'=>str_replace(' ','T',substr($row['created_at'],0,19)).'+07:00','href'=>$href,'kind'=>$receipt?'receipt':'admin','is_read'=>(bool)$row['is_read']];
     }
     ksort($access['warehouses']);
     return ['items'=>$items,'unread_count'=>(int)$summary['unread_count'],'latest_id'=>(string)$summary['latest_id'],
-        'next_before'=>$more?(string)end($rows)['id']:null,'alive_ids'=>$alive,'scope'=>hash('sha256',json_encode([$access['admin'],$access['warehouses']],JSON_THROW_ON_ERROR))];
+        'next_before'=>$more?(string)end($rows)['id']:null,'alive_ids'=>$alive,'read_ids'=>$readIds,'scope'=>hash('sha256',json_encode([$access['admin'],$access['warehouses']],JSON_THROW_ON_ERROR))];
 }
 function readActivityNotification(PDO $pdo,string $userId,mixed $id): void
 {

@@ -92,6 +92,8 @@ try {
     }
     assert.equal(await evaluate('typeof filterReceipts'), 'function', 'Dashboard script failed to load.');
     assert.equal(await evaluate('document.querySelector(".topbar-warehouse").textContent'),'Toàn hệ thống');
+    assert.equal(await evaluate('document.querySelector(".brand-copy strong").textContent'),'PHẦN MỀM QUẢN LÝ KHO VISHIPEL');
+    assert.equal(await evaluate('document.querySelector(".brand-copy small").textContent'),'CÔNG TY TNHH MTV THÔNG TIN ĐIỆN TỬ HÀNG HẢI VIỆT NAM');
     assert.equal(await evaluate('getComputedStyle(document.querySelector(".topbar-warehouse")).backgroundColor'),'rgb(246, 247, 248)','Warehouse badge must use the neutral dashboard palette.');
     assert.equal(await evaluate('getComputedStyle(document.body).color'),'rgb(28, 28, 28)','Main text must use the black palette.');
     assert.equal(await evaluate('getComputedStyle(document.querySelector(".metric-value")).color'),'rgb(28, 28, 28)','Metric values must use black rather than decorative colors.');
@@ -207,6 +209,14 @@ try {
         writeFileSync(join(outputDir, `home-${width}x${height}.png`), Buffer.from(data, 'base64'));
     }
     // Render account UI in a fresh document; no sample accounts are inserted in the database.
+    await evaluate(`document.querySelector('.tab[data-type=all]').click();warehouse.value='';search.value='';filterReceipts();document.querySelectorAll('[data-receipt] .compact-truncate').forEach(element=>{element.textContent='Receipt and warehouse with very long text '.repeat(10);element.title=element.textContent;});`);
+    for(const [width,height] of [[1440,1000],[1280,800],[1024,800],[390,844],[320,568]]) {
+        await page('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
+        await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+        assert.equal(await evaluate(`(()=>{const region=document.querySelector('#receipts .compact-table-scroll');return region.scrollWidth<=region.clientWidth+1 && document.documentElement.scrollWidth<=innerWidth;})()`),true,'Recent receipts must fit without a horizontal scrollbar at '+width);
+        assert.equal(await evaluate(`(()=>{const link=document.querySelector('[data-receipt] .receipt-link');return link.title===link.textContent && link.getAttribute('href')==='index.php?page=imports&id=48';})()`),true,'Long receipt text must retain hints and its exact detail link.');
+    }
+    // Subsequent checks render a fresh page; no business data was changed.
     const accountRender = spawnSync(php, ['tests/home.php', '--accounts', '--render'], { encoding: 'utf8', windowsHide: true });
     assert.equal(accountRender.status, 0, accountRender.stderr);
     await page('Page.navigate', { url: process.env.LOGIN_URL || 'http://localhost/qlvt-remake/public/' });
@@ -385,15 +395,23 @@ try {
     assert.equal(await evaluate('document.getElementById("employee-dialog").open'), false);
     assert.equal(await evaluate('document.getElementById("employee-notice").hidden'), false);
     assert.equal(await evaluate('document.querySelectorAll("[data-employee]").length'), 12, 'Preview must not write employee records.');
-    await evaluate('document.querySelector(".edit-employee").click()');
+    await evaluate('document.querySelector(".employee-details").click(); document.getElementById("employee-detail-edit").click()');
     assert.equal(await evaluate('document.getElementById("edit-employee-code").value'), 'NV001');
     assert.equal(await evaluate('document.getElementById("employee-linked-account").textContent'), 'Tài khoản: minhanh');
     await evaluate('document.getElementById("edit-employee-status").value="inactive"; document.getElementById("edit-employee-status").dispatchEvent(new Event("change"))');
     assert.equal(await evaluate('document.getElementById("employee-inactive-note").hidden'), false);
-    await evaluate('document.querySelector(".close-employee-dialog").click(); document.querySelector(".employee-state-preview").click()');
+    await evaluate('document.querySelector(".close-employee-dialog").click(); document.querySelector(".employee-details").click(); document.getElementById("employee-detail-state").click()');
     assert.equal(await evaluate('document.getElementById("employee-state-dialog").open'), true);
+    assert.equal(await evaluate('employeeStateForm.elements.id.value'), '1');
+    assert.equal(await evaluate('employeeStateForm.elements.status.value'), 'inactive');
+    assert.equal(await evaluate('[...document.querySelectorAll("[data-employee] .account-actions")].every(actions=>actions.children.length===2 && actions.children[0].textContent==="Xem" && actions.children[1].textContent==="Xóa")'),true,'Employee list actions must only show view/delete.');
     await evaluate('document.querySelector("#employee-state-dialog button[value=cancel]").click()');
-    await evaluate('document.querySelector("[data-delete-record]").click()');
+    await evaluate('employeeDetailsDialog.close();openEmployeeDetails(JSON.parse(employeeRows[4].dataset.employee))');
+    assert.equal(await evaluate('document.getElementById("employee-detail-state").textContent'), 'Mở khóa');
+    await evaluate('document.getElementById("employee-detail-state").click()');
+    assert.equal(await evaluate('employeeStateForm.elements.id.value==="5" && employeeStateForm.elements.status.value==="active"'),true,'Unlock must target the employee shown in details.');
+    await evaluate('employeeStateForm.querySelector("[data-close-state]").click()');
+    await evaluate('employeeDetailsDialog.close();document.querySelector("[data-delete-record]").click()');
     assert.equal(await evaluate('document.getElementById("management-delete-dialog").open'), true);
     assert.equal(await evaluate('managementDeleteForm.elements.action.value'), 'delete');
     assert.equal(await evaluate('document.getElementById("management-delete-description").textContent.includes("NV001")'), true);
@@ -408,7 +426,7 @@ try {
         const shot = await page('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
         writeFileSync(join(outputDir, `employees-${width}x${height}.png`), Buffer.from(shot.data, 'base64'));
         for (const editing of [false, true]) {
-            await evaluate(editing ? 'document.querySelector(".edit-employee").click()' : 'document.getElementById("create-employee").click()');
+            await evaluate(editing ? 'document.querySelector(".employee-details").click(); document.getElementById("employee-detail-edit").click()' : 'document.getElementById("create-employee").click()');
             assert.deepEqual(await evaluate(`(() => {
                 const dialog = document.getElementById('employee-dialog');
                 const body = dialog.querySelector('.account-dialog-body');
@@ -508,6 +526,21 @@ try {
         await new Promise(resolve => setTimeout(resolve, 100));
     }
     assert.equal(await evaluate('document.querySelectorAll("[data-warehouse]:not([hidden])").length'), 10);
+    assert.equal(await evaluate('[...document.querySelectorAll("[data-warehouse] .account-actions")].every(actions=>actions.children.length===2 && actions.children[0].textContent==="Xem" && actions.children[1].textContent==="Xóa")'),true,'Warehouse list must only offer view/delete.');
+    await evaluate('document.querySelector(".warehouse-details").click()');
+    assert.equal(await evaluate('warehouseDetailsDialog.querySelectorAll("input,select,textarea").length'),0,'Warehouse details must be read-only.');
+    assert.equal(await evaluate('document.querySelector("[data-warehouse-print-detail=unit_name]").textContent'),'Đơn vị thử');
+    assert.equal(await evaluate('document.querySelector("[data-warehouse-print-detail=keeper_employee_id]").textContent'),'NV01 · Người ký <script>');
+    await evaluate('document.getElementById("warehouse-detail-state").click()');
+    assert.equal(await evaluate('warehouseStateForm.elements.id.value==="1" && warehouseStateForm.elements.status.value==="inactive" && warehouseStateForm.elements.version.value===viewedWarehouse.version'),true,'Warehouse state actions must target the viewed record/version.');
+    await evaluate('warehouseStateForm.querySelector("[data-close-state]").click();warehouseDetailsDialog.close();openWarehouseDetails(JSON.parse(warehouseRows[2].dataset.warehouse))');
+    assert.equal(await evaluate('document.getElementById("warehouse-detail-state").textContent'),'Kích hoạt');
+    await evaluate('document.getElementById("warehouse-detail-state").click()');
+    assert.equal(await evaluate('warehouseStateForm.elements.id.value==="3" && warehouseStateForm.elements.status.value==="active"'),true,'Inactive warehouses must offer activation from details.');
+    await evaluate('warehouseStateForm.requestSubmit()');
+    assert.equal(await evaluate('warehouseStateDialog.open'),false,'Preview state changes must not persist.');
+    assert.equal(await evaluate('viewedWarehouse.status'),'inactive');
+    await evaluate('warehouseDetailsDialog.close()');
     assert.equal(await evaluate('document.querySelector("a[href=\\"index.php?page=warehouses\\"]").getAttribute("aria-current")'), 'page');
     await evaluate('document.getElementById("warehouse-page-next").click()');
     assert.equal(await evaluate('document.querySelectorAll("[data-warehouse]:not([hidden])").length'), 2);
@@ -546,7 +579,7 @@ try {
                 errors: results, enabled: !warehouseForm.querySelector('button[type=submit]').disabled };
         } finally { window.fetch = originalFetch; warehouseForm.dataset.preview = originalPreview; }
     })()`), { correctEndpoint: true, correctAction: true, correctMethod: true, errors: [true, true], enabled: true }, 'Hidden action fields must not shadow the submission URL; non-JSON errors must not claim session expiry.');
-    await evaluate('document.querySelector(".edit-warehouse").click()');
+    await evaluate('document.querySelector(".warehouse-details").click();document.getElementById("warehouse-detail-edit").click()');
     assert.equal(await evaluate('warehouseForm.elements.namedItem("name").value'), 'Kho 1');
     assert.equal(await evaluate('warehouseForm.elements.id.value'), '1');
     assert.equal(await evaluate('warehouseForm.querySelector("[data-print-setting=unit_name]").value'), 'Đơn vị thử');
@@ -579,10 +612,11 @@ try {
         assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, `Warehouse page overflow at ${width}px.`);
         const shot = await page('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
         writeFileSync(join(outputDir, `warehouses-${width}x${height}.png`), Buffer.from(shot.data, 'base64'));
-        for (const selector of ['.edit-warehouse', '.warehouse-state', '[data-delete-record]']) {
+        for (const selector of ['.warehouse-details', '#warehouse-detail-edit', '#warehouse-detail-state', '[data-delete-record]']) {
+            if(selector.startsWith('#warehouse-detail-'))await evaluate('document.querySelector(".warehouse-details").click()');
             await evaluate(`document.querySelector('${selector}').click()`);
             assert.deepEqual(await evaluate(`(() => {
-                const dialog = document.querySelector('dialog[open]');
+                const dialog = [...document.querySelectorAll('dialog[open]')].at(-1);
                 const body = dialog.querySelector('.account-dialog-body');
                 const heading = dialog.querySelector('.account-dialog-heading');
                 const footer = dialog.querySelector('.account-dialog-footer');
@@ -592,10 +626,10 @@ try {
                     fits: dialog.scrollHeight <= dialog.clientHeight + 1 && dialog.scrollWidth <= dialog.clientWidth,
                     actionsVisible: [...footer.querySelectorAll('button'), heading.querySelector('button')].every(button => { const rect = button.getBoundingClientRect(); return rect.top >= 0 && rect.bottom <= innerHeight; }) };
             })()`), { fixed: true, fits: true, actionsVisible: true }, `Warehouse dialog must keep its title/actions fixed at ${width}x${height}.`);
-            await evaluate('document.querySelector("dialog[open] .account-dialog-body").scrollTop=0');
+            await evaluate('[...document.querySelectorAll("dialog[open]")].at(-1).querySelector(".account-dialog-body").scrollTop=0');
             const detail = await page('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
             writeFileSync(join(outputDir, `warehouse-${selector.slice(1)}-${width}x${height}.png`), Buffer.from(detail.data, 'base64'));
-            await evaluate('document.querySelector("dialog[open]").close()');
+            await evaluate('document.querySelectorAll("dialog[open]").forEach(dialog=>dialog.close())');
         }
     }
     await evaluate('document.querySelector("[data-delete-record]").click()');
@@ -994,7 +1028,8 @@ try {
     const deletedPreview=await evaluate(`(async()=>{const original=submitManagementForm;let captured;submitManagementForm=async (...args)=>{captured=Object.fromEntries(new FormData(args[0]));await original(...args);};try{importStateForm.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));await new Promise(resolve=>setTimeout(resolve,0));return captured;}finally{submitManagementForm=original;}})()`);
     assert.equal(deletedPreview.action,'delete');assert.equal(deletedPreview.id,'1');assert.equal('cancel_reason' in deletedPreview,false);
     assert.equal(await evaluate(`!importStateDialog.open && importRows.length===12`),true,'Preview confirmation must not remove real or sample receipt records.');
-    await evaluate(`importRows[0].querySelector('[data-action=confirm]').click()`);
+    assert.equal(await evaluate(`document.querySelector('.imports-card .account-actions a[href*="import-excel"],.imports-card .account-actions [data-action="confirm"]')===null`),true,'Excel and confirmation must be available in details rather than list actions.');
+    await evaluate(`openImport(JSON.parse(importRows[0].dataset.import));document.getElementById('import-confirm').click()`);
     assert.equal(await evaluate(`importStateDialog.open && importStateForm.elements.action.value==='confirm' && importStateForm.elements.cancel_reason.disabled && document.getElementById('import-state-submit').classList.contains('button-primary') && document.getElementById('import-state-warning').textContent.includes('tồn kho')`),true,'Draft confirmation must explain stock effects and omit cancellation fields.');
     const confirmedPreview=await evaluate(`(async()=>{const original=submitManagementForm;let captured;submitManagementForm=async(...args)=>{captured=Object.fromEntries(new FormData(args[0]));await original(...args);};try{importStateForm.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));await new Promise(resolve=>setTimeout(resolve,0));return captured;}finally{submitManagementForm=original;}})()`);
     assert.equal(confirmedPreview.action,'confirm');assert.equal(confirmedPreview.id,'1');assert.equal('cancel_reason' in confirmedPreview,false);
@@ -1251,6 +1286,16 @@ try {
             assert.equal(await evaluate('[...document.querySelectorAll(".category-ring [stroke-dasharray]")].every(circle=>circle.getAttribute("stroke-dasharray")==="0.0000 100")'),true,'Empty catalogue must not show invented category shares.');
         } else if(route==='exports') {
             assert.equal(await evaluate('exportDialog.open && document.getElementById("export-detail-number").textContent==="PX-001"'),true,'Dashboard link must open the requested export.');
+            assert.equal(await evaluate('document.getElementById("export-confirm").hidden'),false,'Editable draft exports must offer confirmation in details.');
+            await evaluate('document.getElementById("export-confirm").click()');
+            assert.equal(await evaluate('exportConfirmDialog.open && exportConfirmForm.elements.action.value==="confirm" && exportConfirmForm.elements.id.value==="1" && exportConfirmForm.elements.version.value==="a".repeat(64)'),true,'Export confirmation must target the selected receipt/version.');
+            await evaluate('exportConfirmForm.requestSubmit()');
+            for(let i=0;i<20 && await evaluate('exportConfirmSaving');i++)await new Promise(resolve=>setTimeout(resolve,20));
+            assert.equal(await evaluate('!exportConfirmDialog.open && currentExport.status==="draft"'),true,'Preview confirmation must not change real or sample stock.');
+            await evaluate('openExport({...currentExport,can_confirm:false})');
+            assert.equal(await evaluate('document.getElementById("export-confirm").hidden'),true,'Viewer exports must not offer confirmation.');
+            await evaluate('openExport({...currentExport,can_confirm:true,status:"confirmed"})');
+            assert.equal(await evaluate('document.getElementById("export-confirm").hidden'),true,'Confirmed exports must not offer repeated confirmation.');
             await evaluate('exportDialog.close()');
             assert.equal(await evaluate('document.querySelectorAll("[data-export]:not([hidden])").length'),10);
             await evaluate('exportNext.click()');
@@ -1305,7 +1350,7 @@ try {
             await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
             assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,route+' outer overflow at '+width);
             if(route==='exports') {
-                assert.equal(await evaluate(`(()=>{const body=exportDialog.querySelector('.account-dialog-body'),header=exportDialog.querySelector('header'),footer=exportDialog.querySelector('footer');const before=[header.getBoundingClientRect().top,footer.getBoundingClientRect().top];body.scrollTop=body.scrollHeight;return before[0]===header.getBoundingClientRect().top && before[1]===footer.getBoundingClientRect().top && exportDialog.scrollWidth<=exportDialog.clientWidth && exportDialog.scrollHeight<=exportDialog.clientHeight+1 && footer.getBoundingClientRect().bottom<=innerHeight;})()`),true,'Export detail heading/footer must remain fixed.');
+                assert.equal(await evaluate(`(()=>{const body=exportDialog.querySelector('.account-dialog-body'),header=exportDialog.querySelector('header'),footer=exportDialog.querySelector('footer');const before=[header.getBoundingClientRect().top,footer.getBoundingClientRect().top];body.scrollTop=body.scrollHeight;return before[0]===header.getBoundingClientRect().top && before[1]===footer.getBoundingClientRect().top && exportDialog.scrollWidth<=exportDialog.clientWidth && exportDialog.scrollHeight<=exportDialog.clientHeight+1 && footer.getBoundingClientRect().bottom<=innerHeight;})()`),true,'Export detail heading/footer must remain fixed at '+width);
             }
             const shot=await page('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
             writeFileSync(join(outputDir,`${route}-${width}x${height}.png`),Buffer.from(shot.data,'base64'));
@@ -1440,7 +1485,11 @@ try {
         const linkedFrame=await page('Page.getFrameTree');await page('Page.setDocumentContent',{frameId:linkedFrame.frameTree.frame.id,html:linkedRender.stdout});
         for(let i=0;i<100;i++){if(await evaluate('document.readyState==="complete" && Boolean(document.querySelector("dialog[open]"))'))break;await new Promise(resolve=>setTimeout(resolve,30));}
         assert.equal(await evaluate('Boolean(document.querySelector("dialog[open]"))'),true,'A search result link must open its record: '+route);
-        if(['accounts','warehouses'].includes(route))assert.equal(await evaluate('document.querySelector("dialog[open] input[name=id]").value'),linkedId,'Editable results must target the requested record.');
+        if(route==='accounts')assert.equal(await evaluate('document.querySelector("dialog[open] input[name=id]").value'),linkedId,'Editable results must target the requested record.');
+        if(route==='warehouses') {
+            assert.equal(await evaluate('viewedWarehouse.id'),linkedId,'Warehouse search must open the requested view.');
+            assert.equal(await evaluate('warehouseDetailsDialog.querySelectorAll("input,select,textarea").length'),0,'Warehouse search must display a read-only view.');
+        }
         if(route==='employees') {
             assert.equal(await evaluate('viewedEmployee.id'),linkedId,'Employee search must open the requested read-only profile.');
             assert.equal(await evaluate('employeeDetailsDialog.querySelectorAll("input,select,textarea").length'),0,'Employee details must display data without editable controls.');
@@ -1484,8 +1533,8 @@ try {
         noticeRequestCount++;
         if(noticeSessionExpired){status=401;response={ok:false,message:'Tài khoản đã đăng nhập ở nơi khác.'};}
         else if(request.method==='POST'){notificationMockPosts++;const fields=new URLSearchParams(request.postData);if(noticeReadFails){status=503;response={ok:false,message:'Không lưu được trạng thái đã xem.'};}else{noticeRead.add(fields.get('id'));response={ok:true};}}
-        else{const unread=noticeRecords.filter(item=>!noticeRead.has(item.id)),before=url.searchParams.get('before'),rows=unread.filter(item=>!before || BigInt(item.id)<BigInt(before)),known=url.searchParams.getAll('known[]');
-            response={ok:true,items:rows.slice(0,5),unread_count:unread.length,latest_id:noticeRecords[0]?.id || '0',next_before:rows.length>5?rows[4].id:null,alive_ids:unread.filter(item=>known.includes(item.id)).map(item=>item.id),scope:noticeScope};}
+        else{const unread=noticeRecords.filter(item=>!noticeRead.has(item.id)),before=url.searchParams.get('before'),rows=noticeRecords.filter(item=>!before || BigInt(item.id)<BigInt(before)),known=url.searchParams.getAll('known[]');
+            response={ok:true,items:rows.slice(0,5).map(item=>({...item,is_read:noticeRead.has(item.id)})),unread_count:unread.length,latest_id:noticeRecords[0]?.id || '0',next_before:rows.length>5?rows[4].id:null,alive_ids:noticeRecords.filter(item=>known.includes(item.id)).map(item=>item.id),read_ids:noticeRecords.filter(item=>known.includes(item.id)&&noticeRead.has(item.id)).map(item=>item.id),scope:noticeScope};}
         await page('Fetch.fulfillRequest',{requestId:message.params.requestId,responseCode:status,responseHeaders:[{name:'Content-Type',value:'application/json; charset=utf-8'}],body:Buffer.from(JSON.stringify(response)).toString('base64')});
     };
     socket.addEventListener('message',noticeHandler);await page('Fetch.enable',{patterns:[{urlPattern:'*index.php?page=notifications*'},{urlPattern:'*index.php?page=imports&id=*'}]});
@@ -1494,6 +1543,7 @@ try {
     const noticeFrame=await page('Page.getFrameTree');await page('Page.setDocumentContent',{frameId:noticeFrame.frameTree.frame.id,html:noticeHtml});
     for(let i=0;i<100;i++){if(await evaluate('typeof loadActivityNotifications==="function" && !activityLoading && activityItems.length===5'))break;await new Promise(resolve=>setTimeout(resolve,100));}
     assert.equal(await evaluate('activityItems.length'),5);assert.equal(await evaluate('document.getElementById("activity-badge").textContent'),'9');
+    assert.equal(await evaluate('[...activityList.querySelectorAll(".activity-seen")].every(button=>button.textContent==="Đánh dấu đã đọc" && button.getAttribute("aria-label").startsWith("Đánh dấu đã đọc: "))'),true,'Unread notifications must show a clear mark-as-read action rather than a read-status label.');
     await evaluate('clearTimeout(activityTimer);activityAudio=null;activityPendingSound=false;activityFrontier=null;window.noticeBeeps=0;window.originalActivityBeep=activityBeep;activityBeep=()=>{window.noticeBeeps++;};activityAudio={state:"running"};activitySound=true;loadActivityNotifications("reset")');
     for(let i=0;i<100;i++){if(await evaluate('!activityLoading'))break;await new Promise(resolve=>setTimeout(resolve,30));}
     assert.equal(await evaluate('noticeBeeps'),0,'Existing unread notices must not replay a sound after initial loading.');
@@ -1502,18 +1552,22 @@ try {
     assert.equal(await evaluate('activityPanel.querySelectorAll("script").length'),0,'Notification titles must be escaped text.');
     assert.equal(await evaluate('activityList.firstElementChild.querySelector("a")===null && activityList.firstElementChild.textContent.includes("<script>")'),true,'Admin messages must remain plain content without navigation.');
     await evaluate('activityMore.click()');for(let i=0;i<100;i++){if(await evaluate('!activityLoading'))break;await new Promise(resolve=>setTimeout(resolve,30));}
-    assert.equal(await evaluate('activityItems.length'),9,'Show more must append older unread notifications.');
+    assert.equal(await evaluate('activityItems.length'),9,'Show more must append older notification history.');
     for(const [width,height] of [[1440,1000],[390,844],[320,568],[844,390]]){
         await page('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
         assert.equal(await evaluate(`(()=>{const body=activityPanel.querySelector('.activity-body'),header=activityPanel.querySelector('header'),footer=activityPanel.querySelector('footer'),before=[header.getBoundingClientRect().top,footer.getBoundingClientRect().top];body.scrollTop=body.scrollHeight;const rect=activityPanel.getBoundingClientRect();return before[0]===header.getBoundingClientRect().top && before[1]===footer.getBoundingClientRect().top && rect.left>=0 && rect.right<=innerWidth && rect.bottom<=innerHeight && activityPanel.scrollWidth<=activityPanel.clientWidth && document.documentElement.scrollWidth<=innerWidth;})()`),true,'Notification panel must fit the screen with fixed heading/actions and a scrolling body.');
         await evaluate('activityPanel.querySelector(".activity-body").scrollTop=0');const shot=await page('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});writeFileSync(join(outputDir,`activity-notifications-${width}x${height}.png`),Buffer.from(shot.data,'base64'));
     }
     const beforeReadPosts=notificationMockPosts;
-    await evaluate('markActivityRead(activityItems.find(row=>row.id==="9"))');
-    assert.equal(await evaluate('activityItems.some(row=>row.id==="9")'),false,'Seen notices must leave the list immediately.');assert.equal(notificationMockPosts,beforeReadPosts+1);
+    await evaluate(`activityList.querySelector('[data-id="9"] .activity-seen').click()`);
+    for(let i=0;i<100;i++){if(await evaluate('!activityBusyIds.has("9")'))break;await new Promise(resolve=>setTimeout(resolve,20));}
+    assert.equal(await evaluate('document.getElementById("activity-count").textContent'),'8 chưa đọc','Marking read must reduce the displayed count.');
+    assert.equal(await evaluate('activityItems.find(row=>row.id==="9").is_read'),true,'Read notices must remain in the list with a read state.');
+    assert.equal(await evaluate(`activityList.querySelector('[data-id="9"]').classList.contains("is-read") && !activityList.querySelector('[data-id="9"] .activity-seen') && getComputedStyle(activityList.querySelector('[data-id="9"] .activity-item-title')).fontWeight < getComputedStyle(activityList.querySelector('[data-id="8"] .activity-item-title')).fontWeight`),true,'Read notices must look lighter and show a read label.');assert.equal(notificationMockPosts,beforeReadPosts+1);
     await evaluate('loadActivityNotifications("reset")');for(let i=0;i<100;i++){if(await evaluate('!activityLoading'))break;await new Promise(resolve=>setTimeout(resolve,30));}
-    assert.equal(await evaluate('activityItems.some(row=>row.id==="9")'),false,'Read notices must stay absent after refreshing.');
-    noticeReadFails=true;await evaluate('markActivityRead(activityItems[0])');assert.equal(await evaluate('activityItems.some(row=>row.id==="8")'),true,'Failed read requests must retain unread notices.');noticeReadFails=false;
+    assert.equal(await evaluate('activityItems.find(row=>row.id==="9").is_read'),true,'Read history must retain its state after refreshing.');
+    const repeatReadPosts=notificationMockPosts;await evaluate('markActivityRead(activityItems.find(row=>row.id==="9"))');assert.equal(notificationMockPosts,repeatReadPosts,'Read notices must not be marked or counted twice.');
+    noticeReadFails=true;await evaluate('markActivityRead(activityItems.find(row=>row.id==="8"))');assert.equal(await evaluate('activityItems.some(row=>row.id==="8")'),true,'Failed read requests must retain unread notices.');noticeReadFails=false;
     noticeRecords.unshift({id:'10',kind:'admin',title:'Kho mới',description:'Thông báo quản trị',created_at:'2026-10-13T10:01:00+07:00',href:null});
     await evaluate('loadActivityNotifications()');for(let i=0;i<100;i++){if(await evaluate('!activityLoading'))break;await new Promise(resolve=>setTimeout(resolve,30));}
     assert.equal(await evaluate('noticeBeeps'),1,'A new event during login must produce one soft chime.');
@@ -1521,7 +1575,7 @@ try {
     await evaluate('document.getElementById("activity-sound").click()');noticeRecords.unshift({id:'11',kind:'admin',title:'Cập nhật danh mục',description:'Thông báo quản trị',created_at:'2026-10-13T10:02:00+07:00',href:null});
     await evaluate('loadActivityNotifications()');for(let i=0;i<100;i++){if(await evaluate('!activityLoading'))break;await new Promise(resolve=>setTimeout(resolve,30));}assert.equal(await evaluate('noticeBeeps'),1,'Muted notifications must remain silent.');
     noticeRead.add('8');await evaluate('loadActivityNotifications()');for(let i=0;i<100;i++){if(await evaluate('!activityLoading'))break;await new Promise(resolve=>setTimeout(resolve,30));}
-    assert.equal(await evaluate('activityItems.some(row=>row.id==="8")'),false,'Polling must remove notices read on another device/tab.');
+    assert.equal(await evaluate('activityItems.find(row=>row.id==="8").is_read'),true,'Polling must refresh the read state from another device/tab without removing history.');
     noticeScope='scope-B';noticeRecords=noticeRecords.filter(row=>row.kind==='admin');
     await evaluate('loadActivityNotifications()');for(let i=0;i<100;i++){if(await evaluate('!activityLoading'))break;await new Promise(resolve=>setTimeout(resolve,30));}
     assert.equal(await evaluate('activityItems.every(row=>row.kind==="admin")'),true,'Scope changes must clear cached warehouse notices.');

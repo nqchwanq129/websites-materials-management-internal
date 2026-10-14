@@ -38,8 +38,15 @@ document.getElementById('export-reset').addEventListener('click',()=>{[exportSea
 filterExports();
 const exportDialog=document.getElementById('export-dialog');
 const exportTypes=Object.fromEntries([...exportType.options].filter(o=>o.value).map(o=>[o.value,o.textContent]));
-const exportStatuses={draft:'Nháp',confirmed:'Đã xác nhận',cancelled:'Đã hủy'};
+const exportStatuses={draft:'Nháp',confirmed:'Đã xuất kho',cancelled:'Đã hủy'};
+let currentExport=null;
+const exportConfirmDialog=document.getElementById('export-confirm-dialog'),exportConfirmForm=document.getElementById('export-confirm-form');
+let exportConfirmSaving=false;
 function openExport(bill) {
+    currentExport=bill;
+    const confirm=document.getElementById('export-confirm');
+    confirm.hidden=bill.status!=='draft' || bill.can_confirm!==true;
+    confirm.disabled=!bill.items.length;
     const excel=document.getElementById('export-excel');
     if(excel.tagName==='A')excel.href='index.php?page=export-excel&id='+encodeURIComponent(bill.id);
     document.getElementById('export-description').textContent=bill.number+' · '+bill.warehouse_name;
@@ -70,7 +77,23 @@ function openExport(bill) {
     }
     document.getElementById('export-pdf-empty').hidden=Boolean(bill.attachments?.length);
     document.getElementById('export-transfers-section').hidden=!bill.transfers?.length;
-    document.getElementById('export-transfers').textContent=(bill.transfers||[]).map(t=>t.number+' · '+exportStatuses[t.status]).join(', ');
+    document.getElementById('export-transfers').textContent=(bill.transfers||[]).map(t=>t.number+' · '+(t.status==='confirmed'?'Đã nhập kho':exportStatuses[t.status])).join(', ');
     exportDialog.showModal(); exportDialog.querySelector('.account-dialog-body').scrollTop=0;
 }
 document.querySelectorAll('.export-details').forEach(button=>button.addEventListener('click',()=>openExport(JSON.parse(button.closest('[data-export]').dataset.export))));
+
+document.getElementById('export-confirm').addEventListener('click',()=>{
+    if(exportConfirmSaving || currentExport?.status!=='draft' || currentExport.can_confirm!==true)return;
+    exportConfirmForm.reset();exportConfirmForm.elements.id.value=currentExport.id;exportConfirmForm.elements.version.value=currentExport.version;
+    exportConfirmForm.querySelector('[data-form-error]').hidden=true;
+    document.getElementById('export-confirm-description').textContent=currentExport.number+' · '+currentExport.warehouse_name;
+    exportConfirmDialog.showModal();
+});
+exportConfirmDialog.querySelectorAll('[data-close-export-confirm]').forEach(button=>button.addEventListener('click',()=>{if(!exportConfirmSaving)exportConfirmDialog.close();}));
+exportConfirmDialog.addEventListener('cancel',event=>{if(exportConfirmSaving)event.preventDefault();});
+exportConfirmForm.addEventListener('submit',async event=>{
+    event.preventDefault();if(exportConfirmSaving || !exportConfirmForm.reportValidity())return;
+    exportConfirmSaving=true;
+    try { await submitManagementForm(exportConfirmForm,exportConfirmDialog,'export-notice'); }
+    finally { exportConfirmSaving=false; }
+});

@@ -4,9 +4,9 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#29235c">
-    <title>Đăng nhập · Quản lý vật tư VISHIPEL</title>
+    <title>Đăng nhập · Phần mềm quản lý kho VISHIPEL</title>
     <link rel="icon" href="assets/images/company-logo.png" type="image/png">
-    <link rel="stylesheet" href="assets/css/login.css">
+    <link rel="stylesheet" href="assets/css/login.css?v=<?= substr(hash_file('sha256', dirname(__DIR__,3) . '/public/assets/css/login.css'),0,12) ?>">
     <script src="assets/js/login.js" defer></script>
 </head>
 <body>
@@ -22,9 +22,10 @@
     <section class="login-panel" aria-labelledby="login-title">
         <div class="login-content">
             <a class="brand" href="./" aria-label="VISHIPEL — Trang đăng nhập">
-                <img src="assets/images/company-logo.png" alt="VISHIPEL" width="500" height="500">
+                <span class="brand-logo"><img src="assets/images/company-logo.png" alt="VISHIPEL" width="500" height="500"></span>
+                <strong class="brand-title">PHẦN MỀM QUẢN LÝ KHO VISHIPEL</strong>
+                <span class="brand-company">CÔNG TY TNHH MTV THÔNG TIN ĐIỆN TỬ HÀNG HẢI VIỆT NAM</span>
             </a>
-            <span class="eyebrow"><span class="status-dot"></span> HỆ THỐNG NỘI BỘ</span>
             <h1 id="login-title">Chào mừng trở lại<span>.</span></h1>
             <p class="intro">Đăng nhập để tiếp tục công việc của bạn.</p>
 

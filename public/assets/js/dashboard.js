@@ -134,7 +134,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!id || !/^[1-9][0-9]*$/.test(id)) return;
     const recordPage = document.getElementById('main-content').dataset.page;
     const target = {imports: ['import', '.import-details'], exports: ['export', '.export-details'], products: ['product', '.product-details'],
-        employees: ['employee', '.employee-details'], warehouses: ['warehouse', '.edit-warehouse'], suppliers: ['supplier', '.supplier-details'],
+        employees: ['employee', '.employee-details'], warehouses: ['warehouse', '.warehouse-details'], suppliers: ['supplier', '.supplier-details'],
         decisions: ['decision', '.decision-details'], accounts: ['account', '.edit-account'], audit: ['audit', '.audit-details']}[['materials','spare-parts','tools','fixed-assets','other-products'].includes(recordPage) ? 'products' : recordPage];
     if (!target) return;
     const [record, button] = target;
