@@ -461,16 +461,16 @@ only from the authenticated actor's role for administrative catalogue operations
 `GET index.php?page=notifications` serves the unread feed/count, pagination and
 currently authorized unread IDs among a bounded list of cached rows. `POST` with
 `action=read`, ID and CSRF marks one authorized notification read. Neither API
-returns raw before/after snapshots. Background polling runs every **15 seconds**,
+returns raw before/after snapshots. Background polling runs every **5 seconds**,
 releases the PHP session lock early and does not extend the 30-minute idle session;
 HTTP 401 clears the client cache, stops polling and returns the browser to login. Failures retain unread data
 and provide retry instead of repeatedly producing toasts.
 
-A brief, low-volume native Web Audio tone announces new unread arrivals after the
+A brief, low-volume Kenney CC0 notification clip announces new unread arrivals after the
 browser permits audio through interaction. **Âm báo: Bật/Tắt** stores a per-account
 preference in the browser. An existing unread backlog does not replay on initial
 loading; a per-tab session cursor avoids replay on navigation or repeated polling.
-No new frontend dependency, external sound file, WebSocket server or cron is needed.
+The audio-only AAC file `public/assets/sounds/notification.mp4` is served locally and decoded once with native Web Audio after interaction. Playback uses 20% gain; muted accounts remain silent and existing/read notifications do not replay it. Source and CC0 notice are retained beside the asset. No new frontend dependency, third-party runtime sound request, WebSocket server or cron is needed.
 The native popover closes with Escape/outside clicks; its heading/footer stay fixed
 while the body scrolls on mobile and desktop.
 
@@ -505,7 +505,7 @@ or submit writes. Write services recheck the authenticated actor using
 that passed the outer gate before another login committed. Trusted CLI jobs keep
 their existing actor authorization. Already-running reads/downloads cannot be
 recalled; new requests require the winning token. The shared notification poll
-returns the old browser to login on its next check (normally within 15 seconds)
+returns the old browser to login on its next check (normally within 5 seconds)
 without extending idle sessions. The login page explains that another login
 replaced the session.
 

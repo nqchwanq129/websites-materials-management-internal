@@ -4,18 +4,23 @@ let activityItems=[],activityNext=null,activityCount=0,activityScope=null,activi
 const activityReadIds=new Set(),activityBusyIds=new Set();
 const activityUser=activityPanel.dataset.user,activityPreview=activityPanel.dataset.preview==='true';
 let activityFrontier=null,activityAudio=null,activitySound=true,activityPendingSound=false;
+let activityAudioBuffer=null,activityAudioLoading=null;
 try{activityFrontier=sessionStorage.getItem('activity-frontier-'+activityUser);activitySound=localStorage.getItem('activity-sound-'+activityUser)!=='off';}catch{}
 function activityBeep(){
     if(!activitySound || !activityAudio || activityAudio.state!=='running')return;
-    const oscillator=activityAudio.createOscillator(),gain=activityAudio.createGain(),now=activityAudio.currentTime;
-    oscillator.type='sine';oscillator.frequency.setValueAtTime(880,now);oscillator.frequency.exponentialRampToValueAtTime(660,now+.16);
-    gain.gain.setValueAtTime(0,now);gain.gain.linearRampToValueAtTime(.035,now+.015);gain.gain.exponentialRampToValueAtTime(.001,now+.18);
-    oscillator.connect(gain);gain.connect(activityAudio.destination);oscillator.onended=()=>{oscillator.disconnect();gain.disconnect();};oscillator.start(now);oscillator.stop(now+.2);
+    if(!activityAudioBuffer){activityPendingSound=true;return;}
+    const source=activityAudio.createBufferSource(),gain=activityAudio.createGain();
+    source.buffer=activityAudioBuffer;gain.gain.value=.2;
+    source.connect(gain);gain.connect(activityAudio.destination);source.onended=()=>{source.disconnect();gain.disconnect();};source.start();
 }
 async function armActivityAudio(){
     if(!activitySound)return;
     try{const Audio=window.AudioContext || window.webkitAudioContext;if(!Audio)return;activityAudio ||= new Audio();await activityAudio.resume();
-        if(activityPendingSound){activityPendingSound=false;activityBeep();}}catch{}
+        activityAudioLoading ||= fetch(activityPanel.dataset.sound,{credentials:'same-origin'}).then(response=>{
+            if(!response.ok)throw new Error('Cannot load notification sound.');return response.arrayBuffer();
+        }).then(bytes=>activityAudio.decodeAudioData(bytes)).then(buffer=>{activityAudioBuffer=buffer;}).catch(error=>{activityAudioLoading=null;throw error;});
+        await activityAudioLoading;
+        if(activityPendingSound && activitySound && !activityStopped){activityPendingSound=false;activityBeep();}}catch{}
 }
 document.addEventListener('pointerdown',armActivityAudio);
 document.addEventListener('keydown',armActivityAudio);
@@ -92,7 +97,7 @@ async function markActivityRead(item,keepalive=false){
 activityMore.addEventListener('click',()=>loadActivityNotifications('more'));
 document.getElementById('activity-retry').addEventListener('click',()=>loadActivityNotifications('reset'));
 activityPanel.addEventListener('toggle',event=>{activityToggle.setAttribute('aria-expanded',String(event.newState==='open'));if(event.newState==='open')loadActivityNotifications('reset');});
-async function pollActivityNotifications(){await loadActivityNotifications();if(!activityStopped)activityTimer=setTimeout(pollActivityNotifications,15000);}
+async function pollActivityNotifications(){await loadActivityNotifications();if(!activityStopped)activityTimer=setTimeout(pollActivityNotifications,5000);}
 if(!activityPreview)pollActivityNotifications();else drawActivityNotifications();
 window.addEventListener('pagehide',()=>clearTimeout(activityTimer));
 window.addEventListener('pageshow',event=>{if(event.persisted && !activityPreview && !activityStopped){clearTimeout(activityTimer);pollActivityNotifications();}});

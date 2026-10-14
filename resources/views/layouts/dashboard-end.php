@@ -6,7 +6,7 @@
 <?php if (in_array($activePage, ['employees', 'warehouses'], true)) require __DIR__ . '/delete-dialog.php'; ?>
 <?php if (in_array($activePage, ['imports','import-create'], true)) require __DIR__ . '/import-image-dialog.php'; ?>
 <?php require __DIR__ . '/profile-dialogs.php'; ?>
-<section id="activity-panel" class="activity-panel" popover="auto" aria-labelledby="activity-title" data-user="<?= escapeHtml((string)$user['id']) ?>" data-preview="<?= ($previewOnly ?? false)?'true':'false' ?>">
+<section id="activity-panel" class="activity-panel" popover="auto" aria-labelledby="activity-title" data-user="<?= escapeHtml((string)$user['id']) ?>" data-preview="<?= ($previewOnly ?? false)?'true':'false' ?>" data-sound="<?= $assetUrl('assets/sounds/notification.mp4') ?>">
     <input id="activity-csrf" name="csrf_token" type="hidden" value="<?= escapeHtml($_SESSION['csrf_token']) ?>">
     <header class="activity-heading"><div><h2 id="activity-title">Thông báo</h2><p id="activity-count" aria-live="polite">Đang tải…</p></div><button id="activity-sound" class="activity-sound" type="button" aria-pressed="true">Âm báo: Bật</button></header>
     <div class="activity-body"><p id="activity-error" class="activity-error" role="alert" hidden><span></span></p><div id="activity-list" role="list" aria-label="Danh sách thông báo"></div><p id="activity-empty" class="activity-empty">Chưa có thông báo.</p></div>

@@ -1589,6 +1589,12 @@ try {
     const noticeFrame=await page('Page.getFrameTree');await page('Page.setDocumentContent',{frameId:noticeFrame.frameTree.frame.id,html:noticeHtml});
     for(let i=0;i<100;i++){if(await evaluate('typeof loadActivityNotifications==="function" && !activityLoading && activityItems.length===5'))break;await new Promise(resolve=>setTimeout(resolve,100));}
     assert.equal(await evaluate('activityItems.length'),5);assert.equal(await evaluate('document.getElementById("activity-badge").textContent'),'9');
+    await page('Input.dispatchKeyEvent',{type:'keyDown',key:'a',code:'KeyA',windowsVirtualKeyCode:65});
+    await page('Input.dispatchKeyEvent',{type:'keyUp',key:'a',code:'KeyA',windowsVirtualKeyCode:65});
+    await evaluate('armActivityAudio()');
+    assert.equal(await evaluate('activityPanel.dataset.sound.startsWith("assets/sounds/notification.mp4?v=")'),true,'Notification sound must use a versioned local MP4 asset.');
+    assert.equal(await evaluate('activityAudio.state==="running" && activityAudioBuffer.duration>0 && activityAudioBuffer.duration<2'),true,'The browser must decode the downloaded AAC/MP4 sound after interaction.');
+    assert.equal(await evaluate('activityAudioBuffer.getChannelData(0).some(sample=>Math.abs(sample)>.001)'),true,'The downloaded notification clip must contain audible samples.');
     assert.equal(await evaluate('[...activityList.querySelectorAll(".activity-seen")].every(button=>button.textContent==="Đánh dấu đã đọc" && button.getAttribute("aria-label").startsWith("Đánh dấu đã đọc: "))'),true,'Unread notifications must show a clear mark-as-read action rather than a read-status label.');
     await evaluate('clearTimeout(activityTimer);activityAudio=null;activityPendingSound=false;activityFrontier=null;window.noticeBeeps=0;window.originalActivityBeep=activityBeep;activityBeep=()=>{window.noticeBeeps++;};activityAudio={state:"running"};activitySound=true;loadActivityNotifications("reset")');
     for(let i=0;i<100;i++){if(await evaluate('!activityLoading'))break;await new Promise(resolve=>setTimeout(resolve,30));}
