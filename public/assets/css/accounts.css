@@ -28,3 +28,5 @@
 #warehouse-details-dialog .account-dialog-footer{flex-wrap:wrap}
 
 .receipts-card{--compact-actions-width:80px;--compact-status-width:112px}.receipts-card .compact-column-type{width:104px}
+
+.avatar{overflow:hidden;flex-shrink:0}.sidebar-bottom>.nav-item.active{background:var(--soft);font-weight:650;box-shadow:inset 3px 0 var(--primary)}.avatar>img{width:100%;height:100%;display:block;object-fit:cover}.personal-identity>.avatar{width:80px;height:80px;border-radius:50%;font-size:30px}.personal-avatar-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}.personal-avatar-actions>.button{font-size:13px;min-height:32px;padding:6px 12px}.personal-identity [data-avatar-status]{display:block;margin-top:6px;font-size:13px;color:var(--muted)}

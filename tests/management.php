@@ -88,6 +88,7 @@ try {
     }
     foreach ($foreignKeys as $sql) $source->exec($sql);
     foreach (explode(';', file_get_contents(dirname(__DIR__) . '/database/2026-10-12-receipt-print-settings.sql')) as $sql) if (trim($sql) !== '') $source->exec($sql);
+    $source->exec(file_get_contents(dirname(__DIR__).'/database/2026-10-14-user-avatar.sql'));
     foreach ($source->query("SHOW TRIGGERS FROM `$original`")->fetchAll() as $trigger) {
         $source->exec("CREATE TRIGGER `{$trigger['Trigger']}` {$trigger['Timing']} {$trigger['Event']} ON `{$trigger['Table']}` FOR EACH ROW " . $trigger['Statement']);
     }
@@ -818,6 +819,7 @@ try {
     $ownPassword='Own-'.bin2hex(random_bytes(12));
     $pdo->prepare('UPDATE users SET password_hash=? WHERE id=?')->execute([password_hash($ownPassword,PASSWORD_DEFAULT),$targetId]);
     $cookie=''; verify(httpManagement('profile')[0]===401,'Guests must not read personal data.');
+    verify(httpManagement('avatar')[0]===401 && httpManagement('help')[0]===303,'Avatar and help require a signed-in account.');
     verify(httpManagement('profile',['action'=>'profile'])[0]===401,'Guests must not edit profiles.');
     $pdo->prepare('DELETE FROM user_warehouses WHERE user_id=?')->execute([$targetId]);
     foreach(['viewer','keeper'] as $role) {
@@ -844,6 +846,42 @@ try {
         $statement=$pdo->prepare('SELECT * FROM audit_logs WHERE user_id=? ORDER BY id DESC LIMIT 1'); $statement->execute([$targetId]); $ownLog=$statement->fetch();
         verify($ownLog['entity_type']==='employees' && (string)$ownLog['entity_id']===$employeeId && json_decode($ownLog['after_data'],true)['full_name']===$ownInput['full_name'],'Personal changes must be attributed to the owner in audit history.');
         verify(httpManagement('accounts')[0]===403 && httpManagement('employees')[0]===403,'Self-service must not open admin management routes.');
+        [$status,$guide]=httpManagement('help');
+        verify($status===200 && str_contains($guide,'id="help-profile"') && str_contains($guide,'id="help-reports"') && !str_contains($guide,'id="help-accounts"'),'Ordinary help must contain usable topics without admin instructions.');
+        verify(str_contains($guide,$role==='keeper'?'Lập và quản lý phiếu nhập':'Tra cứu phiếu nhập'),'Receipt help must match the current role.');
+        // Real multipart uploads in the isolated app: owner-only, validation, replacement and deletion.
+        $own=loadOwnProfile($pdo,$targetId);
+        $avatarInput=['csrf_token'=>$ownCsrf,'action'=>'avatar','version'=>$own['version'],'remove_avatar'=>'0'];
+        $avatarImage=imagecreatetruecolor(60,40); imagefill($avatarImage,0,0,imagecolorallocate($avatarImage,240,120,60));
+        ob_start(); imagepng($avatarImage); $avatarPng=ob_get_clean(); imagedestroy($avatarImage);
+        verify(httpDecisionPdf(array_diff_key($avatarInput,['csrf_token'=>true]),$avatarPng,'avatar.png','profile','avatar')[0]===403,'Avatar changes require CSRF.');
+        verify(httpDecisionPdf($avatarInput,'<svg onload="alert(1)"></svg>','avatar.png','profile','avatar')[0]===422,'Uploaded active content must not become an avatar.');
+        verify(httpDecisionPdf($avatarInput,$avatarPng,'avatar.jpg','profile','avatar')[0]===422,'A disguised image extension must be rejected.');
+        verify(httpDecisionPdf($avatarInput,str_pad($avatarPng,10*1024*1024+1,"\0"),'avatar.png','profile','avatar')[0]===422,'Oversized avatars must be rejected.');
+        verify(httpDecisionPdf($avatarInput+['id'=>$actorId],$avatarPng,'avatar.png','profile','avatar')[0]===422,'Avatar writes cannot select another account.');
+        [$status,$body]=httpDecisionPdf($avatarInput,str_pad($avatarPng,10*1024*1024,"\0"),'avatar.png','profile','avatar');
+        $avatarResult=json_decode($body,true,512,JSON_THROW_ON_ERROR);
+        verify($status===200 && $avatarResult['profile']['avatar_url']!=='' && httpManagement('profile')[0]===200,'Viewer and keeper avatars must save without ending their session.');
+        $savedAvatar=findUser($pdo,'id',$targetId)['avatar_path']; $avatarDisk=$testRoot.'/storage/uploads/'.$savedAvatar;
+        verify(validOwnAvatarPath($savedAvatar,$targetId) && is_file($avatarDisk),'Avatar must be private with a structured owner filename.');
+        $avatarSize=getimagesize($avatarDisk);verify($avatarSize[0]===400 && $avatarSize[1]===400 && $avatarSize['mime']==='image/jpeg','Avatar must be re-encoded into a square JPEG.');
+        [$status,$avatarBody,$avatarHeaders]=httpManagement('avatar&id='.$actorId);
+        verify($status===200 && $avatarBody===file_get_contents($avatarDisk) && in_array('Content-Type: image/jpeg',$avatarHeaders,true),'Avatar GET must return only the session owner image.');
+        [, $layout]=httpManagement('home');verify(substr_count($layout,'alt="Ảnh đại diện cá nhân"')===4,'Saved avatar must render in sidebar, topbar, menu and profile.');
+        verify(httpDecisionPdf($avatarInput,$avatarPng,'avatar.png','profile','avatar')[0]===422 && is_file($avatarDisk),'Stale avatar changes must preserve the current image.');
+        $avatarInput['version']=$avatarResult['profile']['version'];
+        $source->exec("CREATE TRIGGER avatar_audit_failure BEFORE INSERT ON audit_logs FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='Expected avatar audit failure'");
+        try {
+            $filesBefore=glob($testRoot.'/storage/uploads/avatars/*');
+            verify(httpDecisionPdf($avatarInput,$avatarPng,'avatar.png','profile','avatar')[0]===503,'Audit failure must fail the avatar save.');
+            verify(findUser($pdo,'id',$targetId)['avatar_path']===$savedAvatar && glob($testRoot.'/storage/uploads/avatars/*')===$filesBefore,'Failed avatar/audit writes must preserve old data and clean the new file.');
+        } finally { $source->exec('DROP TRIGGER avatar_audit_failure'); }
+        [$status,$body]=httpDecisionPdf($avatarInput,$avatarPng,'avatar.png','profile','avatar');
+        $replacement=json_decode($body,true,512,JSON_THROW_ON_ERROR)['profile'];
+        clearstatcache(); // The HTTP server changed files observed earlier by this separate CLI process.
+        verify($status===200 && !is_file($avatarDisk),'Replacing an avatar must remove the obsolete file after commit.');
+        verify(httpManagement('profile',['csrf_token'=>$ownCsrf,'action'=>'avatar','version'=>$replacement['version'],'remove_avatar'=>'1'])[0]===200,'Users must be able to remove their avatar.');
+        verify(httpManagement('avatar')[0]===404 && loadOwnProfile($pdo,$targetId)['avatar_url']==='' && glob($testRoot.'/storage/uploads/avatars/*')===[],'Removing avatar must restore the default and remove its file.');
     }
     $otherCookie=$cookie;
     $cookie=''; [, $body]=httpManagement('login');
@@ -874,6 +912,15 @@ try {
     $cookie=$adminCookie;
     [$status,$body]=httpManagement('profile'); $unlinked=json_decode($body,true,512,JSON_THROW_ON_ERROR)['profile'];
     verify($status===200 && !$unlinked['editable'],'Unlinked admin must display profile without inventing employee data.');
+    $adminAvatar=['csrf_token'=>$csrf,'action'=>'avatar','version'=>$unlinked['version'],'remove_avatar'=>'0'];
+    [$avatarStatus,$avatarBody]=httpDecisionPdf($adminAvatar,$avatarPng,'avatar.png','profile','avatar');
+    $unlinked=json_decode($avatarBody,true,512,JSON_THROW_ON_ERROR)['profile'];
+    verify($avatarStatus===200 && !$unlinked['editable'] && $unlinked['avatar_url']!=='' && findUser($pdo,'id',$actorId)['employee_id']===null,'An unlinked admin must be able to upload an avatar without inventing an employee.');
+    verify(httpManagement('profile',['csrf_token'=>$csrf,'action'=>'avatar','version'=>$unlinked['version'],'remove_avatar'=>'1'])[0]===200,'Unlinked admin can manage its avatar without creating an employee.');
+    [$status,$guide]=httpManagement('help');verify($status===200 && str_contains($guide,'id="help-accounts"') && str_contains($guide,'id="help-audit"'),'Admin help must document account management and audit.');
+    $pdo->prepare('UPDATE users SET is_super_admin=0 WHERE id=?')->execute([$actorId]);
+    try { [, $guide]=httpManagement('help');verify(str_contains($guide,'id="help-profile"') && !str_contains($guide,'id="help-imports"'),'Ungrant accounts must retain personal help without warehouse links.'); }
+    finally { $pdo->prepare('UPDATE users SET is_super_admin=1 WHERE id=?')->execute([$actorId]); }
     verify(httpManagement('profile',['csrf_token'=>$csrf,'action'=>'profile','version'=>$unlinked['version'],'full_name'=>'Unlinked','email'=>'','phone'=>''])[0]===422,'Unlinked accounts must not create employee records through self-service.');
     $namedDecision=['csrf_token'=>$csrf,'action'=>'save','form_complete'=>'1','warehouse'=>$warehouseIds[0],'number'=>'QĐ 12/2026:../ Hà Nội',
         'issued_date'=>'2026-10-12','decision_type'=>'increase','issuing_authority'=>'Filename check'];

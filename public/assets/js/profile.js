@@ -4,6 +4,16 @@ const passwordDialog = document.getElementById('password-dialog');
 const profileForm = document.getElementById('profile-form');
 const passwordForm = document.getElementById('password-form');
 let profileLoadController;
+let ownProfile;
+const avatarFile = document.getElementById('personal-avatar-file');
+
+function displayPersonalAvatar(element, url, initial) {
+    if (!url) { element.textContent = initial; return; }
+    const image = document.createElement('img');
+    image.src = url; image.alt = 'Ảnh đại diện cá nhân';
+    image.addEventListener('error', () => { element.textContent = initial; }, { once: true });
+    element.replaceChildren(image);
+}
 
 function personalError(form, failure) {
     const error = form.querySelector('[data-form-error]');
@@ -19,16 +29,19 @@ async function personalRequest(options = {}) {
     if (!response.ok || !result.ok) throw Object.assign(new Error(result.message || 'Không thể cập nhật thông tin.'), { status: response.status });
     return result;
 }
-function displayOwnProfile(profile) {
+function displayOwnProfile(profile, preserveContact = false) {
+    ownProfile = profile;
     profileForm.elements.version.value = profile.version;
-    for (const field of ['full_name', 'email', 'phone']) profileForm.elements[field].value = profile[field];
+    if (!preserveContact) for (const field of ['full_name', 'email', 'phone']) profileForm.elements[field].value = profile[field];
     for (const field of ['username', 'code', 'warehouse']) profileForm.querySelector(`[data-profile-${field}]`).value = profile[field];
     profileForm.querySelector('[data-profile-name]').textContent = profile.full_name;
     profileForm.querySelector('[data-profile-role]').textContent = profile.role;
     const initial = Array.from(profile.full_name.trim())[0]?.toLocaleUpperCase('vi') || '?';
-    profileForm.querySelector('[data-profile-initial]').textContent = initial;
+    displayPersonalAvatar(profileForm.querySelector('[data-profile-initial]'), profile.avatar_url, initial);
     document.querySelectorAll('[data-user-name]').forEach(element => { element.textContent = profile.full_name; });
-    document.querySelectorAll('[data-user-initial]').forEach(element => { element.textContent = initial; });
+    document.querySelectorAll('[data-user-initial]').forEach(element => displayPersonalAvatar(element, profile.avatar_url, initial));
+    profileForm.querySelector('[data-change-avatar]').disabled = false;
+    profileForm.querySelector('[data-remove-avatar]').hidden = !profile.avatar_url;
     document.getElementById('profile-fields').disabled = !profile.editable;
     profileForm.querySelector('[type=submit]').disabled = !profile.editable;
     profileForm.querySelector('[data-profile-unlinked]').hidden = profile.editable;
@@ -47,6 +60,10 @@ async function openPersonalDialog(kind) {
         document.getElementById('profile-fields').disabled = true;
         profileForm.querySelector('[type=submit]').disabled = true;
         profileForm.querySelector('[data-profile-role]').textContent = '';
+        ownProfile = null;
+        profileForm.querySelector('[data-change-avatar]').disabled = true;
+        profileForm.querySelector('[data-remove-avatar]').hidden = true;
+        profileForm.querySelector('[data-avatar-status]').textContent = '';
     }
     dialog.showModal(); dialog.querySelector('.account-dialog-body').scrollTop = 0;
     if (kind === 'password') return;
@@ -106,3 +123,36 @@ for (const form of [profileForm, passwordForm]) form.addEventListener('submit', 
         if (form === profileForm) form.querySelector('[type=submit]').disabled = document.getElementById('profile-fields').disabled;
     }
 });
+
+profileForm.querySelector('[data-change-avatar]').addEventListener('click', () => avatarFile.click());
+profileForm.querySelector('[data-remove-avatar]').addEventListener('click', () => updatePersonalAvatar(null));
+avatarFile.addEventListener('change', () => { if (avatarFile.files[0]) updatePersonalAvatar(avatarFile.files[0]); });
+async function updatePersonalAvatar(file) {
+    if (!ownProfile || profileForm.dataset.saving === 'true') return;
+    if (file && (file.size > 10 * 1024 * 1024 || !['image/jpeg', 'image/png', 'image/webp'].includes(file.type))) {
+        avatarFile.value = ''; showNotification('Chọn ảnh JPG, PNG hoặc WebP, tối đa 10 MB.', 'warning'); return;
+    }
+    if (profileForm.dataset.preview === 'true') {
+        avatarFile.value = ''; showNotification('Bản xem trước: ảnh chưa được lưu vào dữ liệu.', 'info'); return;
+    }
+    const payload = new FormData();
+    payload.set('csrf_token', profileForm.elements.csrf_token.value);
+    payload.set('action', 'avatar'); payload.set('version', ownProfile.version);
+    payload.set('remove_avatar', file ? '0' : '1');
+    if (file) payload.set('avatar', file);
+    const buttons = [...profileForm.querySelectorAll('button')];
+    profileForm.dataset.saving = 'true'; buttons.forEach(button => { button.disabled = true; });
+    const status = profileForm.querySelector('[data-avatar-status]');
+    status.textContent = file ? 'Đang lưu ảnh…' : 'Đang gỡ ảnh…';
+    profileForm.querySelector('[data-form-error]').hidden = true;
+    try {
+        const result = await personalRequest({ method: 'POST', body: payload });
+        displayOwnProfile(result.profile, true);
+        showNotification(result.message, 'success');
+    } catch (failure) { personalError(profileForm, failure); }
+    finally {
+        avatarFile.value = ''; status.textContent = ''; profileForm.dataset.saving = 'false';
+        buttons.forEach(button => { button.disabled = false; });
+        profileForm.querySelector('[type=submit]').disabled = !ownProfile.editable;
+    }
+}

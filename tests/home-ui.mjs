@@ -115,7 +115,7 @@ try {
     assert.equal(await evaluate('document.querySelector("[data-receipt] .receipt-link").getAttribute("href")'),'index.php?page=imports&id=48');
     assert.equal(await evaluate('document.querySelector(".donut .purple-ring").getAttribute("stroke-dasharray")'),'50.0000 100');
     assert.equal(await evaluate('document.querySelector("[data-receipt] small").textContent'),'Thiết bị thông tin <script>');
-    await evaluate('document.getElementById("receipt-search").value=""; document.getElementById("receipt-search").dispatchEvent(new Event("input")); document.querySelector("[data-feature=\\"Hướng dẫn sử dụng\\"]").click()');
+    await evaluate('document.getElementById("receipt-search").value=""; document.getElementById("receipt-search").dispatchEvent(new Event("input")); document.querySelector("[data-feature=\\"Tồn kho\\"]").click()');
     assert.equal(await evaluate('document.getElementById("feature-dialog").open'), true);
     await page('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
     await page('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
@@ -1383,6 +1383,7 @@ try {
             assert.equal(await evaluate('profileForm.querySelectorAll("[readonly]").length'),3,'Account identifiers and warehouse must stay read-only.');
             assert.equal(await evaluate('profileForm.querySelector("[type=submit]").disabled'),label==='unlinked');
             assert.equal(await evaluate('profileForm.querySelector("[data-profile-unlinked]").hidden'),label!=='unlinked');
+            assert.equal(await evaluate('profileForm.querySelector("[data-change-avatar]").disabled'),false,'All roles, including unlinked accounts, must be able to change their avatar.');
             assert.equal(await evaluate('profileDialog.getBoundingClientRect().width<=600'),true,'Personal popup must use its compact width.');
             const fixedDialog=`(() => {
                 const dialog=document.querySelector('dialog[open]'),body=dialog.querySelector('.account-dialog-body'),header=dialog.querySelector('header'),footer=dialog.querySelector('footer');
@@ -1420,6 +1421,7 @@ try {
                     if(options.method==='POST') personalPayloads.push(Object.fromEntries(options.body.entries()));
                     if(personalMockFailure) return new Response(JSON.stringify({ok:false,message:'Phiên đăng nhập đã hết hạn.'}),{status:401,headers:{'Content-Type':'application/json'}});
                     if(options.method==='POST' && options.body.get('action')==='profile') personalMockState={...personalMockState,full_name:options.body.get('full_name')};
+                    if(options.method==='POST' && options.body.get('action')==='avatar') personalMockState={...personalMockState,version:'new-avatar-version',avatar_url:options.body.get('remove_avatar')==='1'?'':URL.createObjectURL(options.body.get('avatar'))};
                     const token=options.body?.get('action')==='password'?'c'.repeat(64):'b'.repeat(64);
                     return new Response(JSON.stringify({ok:true,message:'Đã lưu.',csrf_token:token,profile:personalMockState}),{headers:{'Content-Type':'application/json'}});
                 };
@@ -1431,6 +1433,20 @@ try {
             assert.equal(await evaluate('[...document.querySelectorAll("[data-user-name]")].every(element=>element.textContent==="Tên mới <script>" && !element.querySelector("script"))'),true,'Saved identity must update immediately and remain text.');
             assert.equal(await evaluate('personalPayloads[0].full_name'),'Tên mới <script>');
             assert.equal(await evaluate('Object.keys(personalPayloads[0]).sort().join(",")'),'action,csrf_token,email,full_name,phone,version','Only editable fields should be submitted.');
+            await evaluate(`(async()=>{await openPersonalDialog('profile');profileForm.elements.full_name.value='Liên hệ chưa lưu';
+                const canvas=document.createElement('canvas');canvas.width=canvas.height=20;
+                canvas.getContext('2d').fillRect(0,0,20,20);
+                const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));
+                await updatePersonalAvatar(new File([blob],'avatar.png',{type:'image/png'}));
+                await new Promise(resolve=>setTimeout(resolve,50));})()`);
+            assert.equal(await evaluate('document.querySelectorAll("[data-user-initial] img,[data-profile-initial] img").length'),4,'Saving an avatar must update every shared identity immediately.');
+            assert.equal(await evaluate('profileDialog.open && profileForm.elements.full_name.value==="Liên hệ chưa lưu"'),true,'Avatar saving must preserve the dialog and unsaved contact fields.');
+            assert.equal(await evaluate('personalPayloads[1].action'),'avatar');
+            assert.equal(await evaluate('personalPayloads[1].avatar instanceof File'),true,'Avatar upload must send an actual file.');
+            await evaluate('updatePersonalAvatar(null)');
+            assert.equal(await evaluate('document.querySelectorAll("[data-user-initial] img,[data-profile-initial] img").length'),0,'Removing the avatar must restore initials everywhere.');
+            assert.equal(await evaluate('profileForm.querySelector("[data-remove-avatar]").hidden'),true);
+            await evaluate('profileDialog.close()');
             await evaluate('openPersonalDialog("password");passwordForm.elements.current_password.value="Current-example";passwordForm.elements.password.value="New-password-example";passwordForm.elements.password_confirmation.value="New-password-example";passwordForm.requestSubmit()');
             await evaluate('new Promise(resolve=>setTimeout(resolve,50))');
             assert.equal(await evaluate('[...document.querySelectorAll("input[name=csrf_token]")].every(input=>input.value==="c".repeat(64))'),true,'New CSRF must update every form, including logout.');
@@ -1441,6 +1457,36 @@ try {
             assert.equal(await evaluate('[...passwordForm.querySelectorAll("input[type=password]")].every(input=>input.value==="")'),true,'Failed password requests must clear secrets.');
             await evaluate('passwordDialog.close();window.fetch=personalNativeFetch');
         }
+    }
+    for (const role of ['admin','viewer','keeper']) {
+        const helpRender=spawnSync(php,['tests/home.php','--help','--render',...(role==='admin'?[]:['--'+role])],{encoding:'utf8',windowsHide:true});
+        assert.equal(helpRender.status,0,helpRender.stderr);
+        await page('Page.navigate',{url:process.env.LOGIN_URL || 'http://localhost/qlvt-remake/public/'});
+        for(let attempt=0;attempt<100;attempt++){if(await evaluate('document.readyState==="complete" && Boolean(document.getElementById("login-form"))'))break;await new Promise(resolve=>setTimeout(resolve,100));}
+        const frame=await page('Page.getFrameTree');
+        await page('Page.setDocumentContent',{frameId:frame.frameTree.frame.id,html:helpRender.stdout});
+        for(let attempt=0;attempt<100;attempt++){if(await evaluate('document.readyState==="complete" && typeof helpSearch === "object"'))break;await new Promise(resolve=>setTimeout(resolve,100));}
+        assert.equal(await evaluate('Boolean(document.querySelector(".sidebar-bottom a[aria-current=page]"))'),true,'Help must be a real page in the fixed sidebar footer.');
+        assert.equal(await evaluate('Boolean(document.getElementById("help-accounts"))'),role==='admin','Help must respect management permissions.');
+        await evaluate('helpSearch.value="anh dai dien";helpSearch.dispatchEvent(new Event("input"))');
+        assert.equal(await evaluate('document.querySelectorAll("[data-help-topic]:not([hidden])").length'),1,'Help search must match Vietnamese without accents.');
+        assert.equal(await evaluate('document.getElementById("help-profile").hidden'),false);
+        await evaluate('helpSearch.value="khong-ton-tai-012345";helpSearch.dispatchEvent(new Event("input"))');
+        assert.equal(await evaluate('document.getElementById("help-empty").hidden'),false,'Help must explain no matching results.');
+        await evaluate('helpSearch.value="";helpSearch.dispatchEvent(new Event("input"))');
+        assert.equal(await evaluate('document.querySelectorAll("[data-help-topic]:not([hidden])").length'),role==='admin'?14:10,'Clearing help search must restore all topics.');
+        await evaluate('document.querySelector("[data-help-faq] summary").click()');
+        assert.equal(await evaluate('document.querySelector("[data-help-faq]").open'),true,'FAQs must expand using native controls.');
+        for (const [width,height] of [[1440,1000],[1366,768],[390,844],[320,568],[844,390]]) {
+            await page('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
+            await evaluate('scrollTo(0,0);new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+            assert.equal(await evaluate('document.documentElement.scrollWidth<=innerWidth'),true,'Help must fit the screen at '+width);
+            const shot=await page('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+            writeFileSync(join(outputDir,`help-${role}-${width}x${height}.png`),Buffer.from(shot.data,'base64'));
+        }
+        await evaluate('document.querySelector("#help-profile [data-open-profile]").click()');
+        assert.equal(await evaluate('profileDialog.open'),true,'Help must open the existing personal editor.');
+        await evaluate('profileDialog.close()');
     }
     for (const [route, role, mixed] of [['imports','viewer',false],['imports','keeper',true],['decisions','keeper',false],['products','viewer',false],['reports','viewer',false]]) {
         const roleRender=spawnSync(php,['tests/home.php','--'+route,'--'+role,...(mixed?['--mixed']:[]),'--render'],{encoding:'utf8',windowsHide:true});

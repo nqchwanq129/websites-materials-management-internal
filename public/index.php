@@ -5,7 +5,7 @@ require dirname(__DIR__) . '/app/bootstrap.php';
 
 $page = is_string($_GET['page'] ?? null) ? $_GET['page'] : 'login';
 $method = $_SERVER['REQUEST_METHOD'];
-if (!in_array($page, ['login', 'home', 'profile', 'search', 'notifications', 'exports', 'export-create', 'export-file', 'export-excel', 'imports', 'import-create', 'import-file', 'import-image', 'import-excel', 'product-excel', 'products', 'materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products', 'accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'decision-file', 'reports', 'audit', 'logout'], true)) {
+if (!in_array($page, ['login', 'home', 'help', 'profile', 'avatar', 'search', 'notifications', 'exports', 'export-create', 'export-file', 'export-excel', 'imports', 'import-create', 'import-file', 'import-image', 'import-excel', 'product-excel', 'products', 'materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products', 'accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'decision-file', 'reports', 'audit', 'logout'], true)) {
     http_response_code(404);
     exit('Trang không tồn tại.');
 }
@@ -99,12 +99,18 @@ if ($page === 'notifications') {
     } catch (DomainException $error) { respondJson(['ok'=>false,'message'=>$error->getMessage()],422); }
     catch (Throwable $error) { error_log('QLVT notifications: '.$error->getMessage()); respondJson(['ok'=>false,'message'=>'Không tải được thông báo. Vui lòng thử lại.'],503); }
 }
+if ($page === 'avatar') {
+    if ($user === null) { http_response_code(401); exit; }
+    if ($method !== 'GET') { header('Allow: GET'); http_response_code(405); exit; }
+    session_write_close();
+    serveOwnAvatar($user);
+}
 if ($page === 'profile') {
     if ($user === null) respondJson(['ok'=>false,'message'=>'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.'],401);
     if ($method === 'POST' && !validCsrfToken()) respondJson(['ok'=>false,'message'=>'Phiên xác nhận không hợp lệ. Hãy tải lại trang.'],403);
     try {
         if ($method === 'GET') respondJson(['ok'=>true,'profile'=>loadOwnProfile(connectDatabase(),(string)$user['id'])]);
-        $saved = saveOwnProfile(connectDatabase(),(string)$user['id'],$_POST,$_SERVER['REMOTE_ADDR']);
+        $saved = saveOwnProfile(connectDatabase(),(string)$user['id'],$_POST,$_SERVER['REMOTE_ADDR'],$_FILES);
         if (($_POST['action'] ?? '') === 'password') {
             session_regenerate_id(true);
             $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
@@ -114,7 +120,7 @@ if ($page === 'profile') {
     } catch (DomainException $error) { respondJson(['ok'=>false,'message'=>$error->getMessage()],422); }
     catch (Throwable $error) { error_log('QLVT profile: '.$error->getMessage()); respondJson(['ok'=>false,'message'=>'Không thể cập nhật lúc này. Vui lòng tải lại trang và kiểm tra trước khi thử lại.'],503); }
 }
-if (in_array($page, ['home', 'exports', 'export-create', 'export-file', 'export-excel', 'imports', 'import-create', 'import-file', 'import-image', 'import-excel', 'product-excel', 'products', 'materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products', 'accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'decision-file', 'reports', 'audit'], true)) {
+if (in_array($page, ['home', 'help', 'exports', 'export-create', 'export-file', 'export-excel', 'imports', 'import-create', 'import-file', 'import-image', 'import-excel', 'product-excel', 'products', 'materials', 'spare-parts', 'tools', 'fixed-assets', 'other-products', 'accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'decision-file', 'reports', 'audit'], true)) {
     if ($user === null) {
         if ($method === 'POST' && $page !== 'home') respondJson(['ok' => false, 'message' => 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.'], 401);
         redirectTo('login');
@@ -126,7 +132,11 @@ if (in_array($page, ['home', 'exports', 'export-create', 'export-file', 'export-
         http_response_code(403);
         exit('Bạn không có quyền truy cập trang quản lý này.');
     }
-    if ($page === 'home' && $method === 'POST') { header('Allow: GET'); respondJson(['ok'=>false,'message'=>'Tổng quan chỉ hỗ trợ tra cứu.'],405); }
+    if (in_array($page,['home','help'],true) && $method === 'POST') { header('Allow: GET'); respondJson(['ok'=>false,'message'=>'Trang này chỉ hỗ trợ tra cứu.'],405); }
+    if ($page === 'help') {
+        require dirname(__DIR__).'/resources/views/help/index.php';
+        exit;
+    }
     if ($page !== 'home' && $method === 'POST') {
         if ($page === 'reports') { header('Allow: GET'); respondJson(['ok' => false, 'message' => 'Báo cáo chỉ hỗ trợ tra cứu.'], 405); }
         if (($page === 'exports' && ($_POST['action'] ?? '') !== 'confirm') || ($page === 'imports' && !in_array($_POST['action'] ?? '', ['update','delete','cancel','confirm'], true))) { header('Allow: GET'); respondJson(['ok' => false, 'message' => 'Thao tác phiếu không được hỗ trợ.'], 405); }

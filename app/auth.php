@@ -86,7 +86,7 @@ function canManageWarehouse(?array $access, string $warehouseId): bool
 }
 function canAccessPage(array $access, string $page, bool $write = false): bool
 {
-    if ($access['admin'] || in_array($page, ['home','profile'], true)) return true;
+    if ($access['admin'] || in_array($page, ['home','profile','help'], true)) return true;
     if (in_array($page, ['accounts','employees','warehouses','audit'], true)) return false;
     $keeper = in_array('keeper', $access['warehouses'], true);
     if (in_array($page, ['import-create','export-create'], true)) return $keeper;

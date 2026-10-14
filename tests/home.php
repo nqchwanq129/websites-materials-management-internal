@@ -15,14 +15,15 @@ if ($rolePreview !== '') {
 $_SESSION = ['csrf_token' => str_repeat('a', 64)];
 $preview = 'dashboard';
 $productPages = ['materials' => 3, 'spare-parts' => 3, 'tools' => 2, 'fixed-assets' => 2, 'other-products' => 2];
-foreach (array_merge(['export-create', 'exports', 'import-create', 'imports', 'products', 'accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'reports', 'audit'], array_keys($productPages)) as $option) {
+foreach (array_merge(['help', 'export-create', 'exports', 'import-create', 'imports', 'products', 'accounts', 'employees', 'warehouses', 'suppliers', 'decisions', 'reports', 'audit'], array_keys($productPages)) as $option) {
     if (in_array('--' . $option, $argv, true)) $preview = $option;
 }
-$sampleRows = ['dashboard' => ['data-receipt ', 5], 'import-create' => ['id="import-create-form"', 1], 'imports' => ['data-import="', 12], 'products' => ['data-product="', 12], 'accounts' => ['data-account="', 6],
+$sampleRows = ['help'=>['data-help-topic>',14], 'dashboard' => ['data-receipt ', 5], 'import-create' => ['id="import-create-form"', 1], 'imports' => ['data-import="', 12], 'products' => ['data-product="', 12], 'accounts' => ['data-account="', 6],
     'employees' => ['data-employee="', 12], 'warehouses' => ['data-warehouse="', 12], 'suppliers' => ['data-supplier="', 12], 'decisions' => ['data-decision="', 12], 'reports' => ['data-report-row>', 60], 'audit' => ['data-audit="', 14]];
 $previewOnly = true;
 $ownProfilePreview = ['username'=>$user['username'],'full_name'=>$user['full_name'],'email'=>'preview@example.com','phone'=>'0901234567','code'=>'NV-001',
     'warehouse'=>$user['employee_warehouse_name'],'role'=>$user['is_super_admin']?'Quản trị viên':'Người xem','editable'=>!in_array('--unlinked-profile',$argv,true),'version'=>'preview'];
+if ($preview === 'help' && $rolePreview !== '') $sampleRows['help'][1] = 10;
 $sampleRows['exports'] = ['data-export="', 12]; $sampleRows['export-create'] = ['id="export-create-form"', 1];
 foreach ($productPages as $productPage => $count) $sampleRows[$productPage] = ['data-product="', $count];
 if ($preview === 'reports') {
@@ -38,7 +39,7 @@ if ($preview === 'reports') {
     $filters = reportFilters(['kind' => $kind], $reportData); $report = buildReport($reportData, $filters); $reportError = '';
     $previewOnly = !in_array('--live-report', $argv, true);
     $sampleRows['reports'][1] = $kind === 'inventory' ? 60 : 12;
-} else require __DIR__ . '/fixtures/' . (isset($productPages[$preview]) ? 'products' : $preview) . '.php';
+} elseif ($preview !== 'help') require __DIR__ . '/fixtures/' . (isset($productPages[$preview]) ? 'products' : $preview) . '.php';
 if ($rolePreview !== '') {
     if (isset($managementData['exports'])) foreach ($managementData['exports'] as &$bill) $bill['can_confirm']=canManageWarehouse($access,(string)$bill['warehouse_id']); unset($bill);
     if (isset($managementData['imports'])) foreach ($managementData['imports'] as &$bill) $bill['can_edit']=canManageWarehouse($access,(string)$bill['warehouse_id']); unset($bill);
@@ -67,7 +68,7 @@ if(!str_contains($html,'title="'.escapeHtml($user['is_super_admin']?'Phạm vi q
 if (str_contains($html, 'Quản trị viên <script>') || !str_contains($html, 'Quản trị viên &lt;script&gt;')
     || substr_count($html, $sampleRows[$preview][0]) !== $sampleRows[$preview][1]
     || !str_contains($html, 'name="csrf_token"')
-    || !str_contains(mb_strtolower($html), $preview === 'dashboard' ? 'số liệu minh họa' : ($previewOnly ? 'dữ liệu mẫu' : 'dữ liệu thực tế'))) {
+    || !str_contains(mb_strtolower($html), $preview === 'help' ? 'các bước thao tác' : ($preview === 'dashboard' ? 'số liệu minh họa' : ($previewOnly ? 'dữ liệu mẫu' : 'dữ liệu thực tế')))) {
     throw new RuntimeException('Dashboard rendering, escaping or sample-data labeling failed.');
 }
 echo in_array('--render', $argv, true) ? $html : 'PASS: ' . $preview . " renders without database, escapes account name, labels data source and preserves logout CSRF.\n";
